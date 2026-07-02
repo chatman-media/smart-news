@@ -1,0 +1,21 @@
+{
+  "name": "smart-news",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "bun run src/login.ts",
+    "start": "bun run src/index.ts",
+    "once": "bun run src/once.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@mtcute/bun": "latest",
+    "grammy": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
