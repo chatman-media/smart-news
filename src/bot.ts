@@ -31,7 +31,12 @@ function renderPost(d: Draft): string {
 }
 
 function renderDraftPreview(d: Draft): string {
-  const origin = d.source === "rubric" ? "рубрика" : `@${d.source}`;
+  const origin =
+    d.source === "rubric"
+      ? "рубрика"
+      : d.source.startsWith("rss:")
+        ? d.source.slice(4)
+        : `@${d.source}`;
   return [
     `<b>Черновик #${d.id}</b> · ${d.category} · ${d.tone} · важность ${d.importance}/5 · ${origin}`,
     "",

@@ -28,6 +28,13 @@ db.exec(`
     UNIQUE(source, source_msg_id)
   );
 
+  CREATE TABLE IF NOT EXISTS rss_seen (
+    feed TEXT NOT NULL,
+    guid TEXT NOT NULL,
+    seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (feed, guid)
+  );
+
   CREATE TABLE IF NOT EXISTS rubric_topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,
@@ -93,6 +100,19 @@ export function setDraftStatus(id: number, status: string): void {
 
 export function setAdminMsgId(id: number, adminMsgId: number): void {
   db.run("UPDATE drafts SET admin_msg_id = ? WHERE id = ?", [adminMsgId, id]);
+}
+
+export function isRssSeen(feed: string, guid: string): boolean {
+  const row = db
+    .query<{ n: number }, [string, string]>(
+      "SELECT COUNT(*) AS n FROM rss_seen WHERE feed = ? AND guid = ?",
+    )
+    .get(feed, guid);
+  return (row?.n ?? 0) > 0;
+}
+
+export function markRssSeen(feed: string, guid: string): void {
+  db.run("INSERT INTO rss_seen (feed, guid) VALUES (?, ?) ON CONFLICT DO NOTHING", [feed, guid]);
 }
 
 /** Доля негативных постов среди новостных черновиков за последние N дней (0..1). */

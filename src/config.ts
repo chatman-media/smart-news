@@ -23,6 +23,8 @@ export const config = {
   // На первом запуске берём только хвост канала, чтобы не сжечь токены на архиве
   firstRunLimit: 10,
   perCycleLimit: 50,
+  rssFirstRunLimit: 5,
+  rssPerCycleLimit: 20,
   minPostLength: 40,
   maxPostLength: 4000,
 };

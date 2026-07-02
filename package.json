@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
     "@mtcute/bun": "latest",
+    "fast-xml-parser": "^5.9.3",
     "grammy": "latest"
   },
   "devDependencies": {

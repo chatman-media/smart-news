@@ -6,5 +6,27 @@
       "note": "Новости Пхукета — русскоязычная газета, выходит с 2012"
     },
     { "username": "real_phuket", "note": "Реальный Пхукет 18+ — заметки экспата, события острова" }
+  ],
+  "feeds": [
+    {
+      "name": "thaiger-phuket",
+      "url": "https://thethaiger.com/news/phuket/feed",
+      "note": "The Thaiger, лента Пхукета (EN)"
+    },
+    {
+      "name": "khaosod-en",
+      "url": "https://www.khaosodenglish.com/feed/",
+      "note": "Khaosod English, национальные новости (EN)"
+    },
+    {
+      "name": "bangkokpost",
+      "url": "https://www.bangkokpost.com/rss/data/most-recent.xml",
+      "note": "Bangkok Post, самое свежее (EN)"
+    },
+    {
+      "name": "khaosod-th",
+      "url": "https://www.khaosod.co.th/feed",
+      "note": "Khaosod, тайскоязычный первоисточник (TH)"
+    }
   ]
 }
