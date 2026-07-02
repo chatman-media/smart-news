@@ -10,10 +10,10 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "latest",
     "@mtcute/bun": "latest",
     "fast-xml-parser": "^5.9.3",
-    "grammy": "latest"
+    "grammy": "latest",
+    "openai": "^6.45.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

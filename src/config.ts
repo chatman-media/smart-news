@@ -14,7 +14,8 @@ export const config = {
   botToken: required("BOT_TOKEN"),
   adminChatId: Number(required("ADMIN_CHAT_ID")),
   channelId: parseChatId(required("CHANNEL_ID")),
-  claudeModel: process.env.CLAUDE_MODEL || "claude-opus-4-8",
+  openrouterApiKey: required("OPENROUTER_API_KEY"),
+  llmModel: process.env.LLM_MODEL || "anthropic/claude-opus-4.8",
   pollIntervalMin: Number(process.env.POLL_INTERVAL_MIN || "10"),
   // Максимальная доля негатива в фиде, % (важность 5 — предупреждения о безопасности — проходят всегда)
   negativeQuotaPct: Number(process.env.NEGATIVE_QUOTA_PCT || "20"),

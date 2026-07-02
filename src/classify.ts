@@ -1,7 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config";
-
-const anthropic = new Anthropic();
+import { contentOf, llm } from "./llm";
 
 export const CATEGORIES = [
   "safety",
@@ -89,31 +87,18 @@ export async function classify(postText: string, recentDraftTitles: string[]): P
     .filter(Boolean)
     .join("\n\n");
 
-  const response = await anthropic.messages.create({
-    model: config.claudeModel,
+  const response = await llm.chat.completions.create({
+    model: config.llmModel,
     max_tokens: 1500,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPrompt }],
-    output_config: {
-      format: { type: "json_schema", schema: VERDICT_SCHEMA },
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "verdict", strict: true, schema: VERDICT_SCHEMA },
     },
   });
 
-  if (response.stop_reason === "refusal") {
-    return {
-      keep: false,
-      reason: "refusal",
-      category: "other",
-      importance: 1,
-      tone: "neutral",
-      title: "",
-      summary: "",
-    };
-  }
-
-  const text = response.content.find((b) => b.type === "text")?.text;
-  if (!text) {
-    throw new Error(`Пустой ответ модели (stop_reason=${response.stop_reason})`);
-  }
-  return JSON.parse(text) as Verdict;
+  return JSON.parse(contentOf(response)) as Verdict;
 }

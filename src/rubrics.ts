@@ -1,5 +1,4 @@
-// Ежедневные авторские рубрики: генерируются Claude с живым веб-поиском, а не парсятся.
-import Anthropic from "@anthropic-ai/sdk";
+// Ежедневные авторские рубрики: генерируются LLM с живым веб-поиском, а не парсятся.
 import { config } from "./config";
 import {
   type Draft,
@@ -10,9 +9,8 @@ import {
   pickRubricTopic,
   seedRubricTopics,
 } from "./db";
+import { contentOf, llm } from "./llm";
 import { ACTIVITIES, PLACES } from "./rubric-topics";
-
-const anthropic = new Anthropic();
 
 export type RubricKind = "place" | "activity";
 
@@ -42,24 +40,17 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
   const topic = pickRubricTopic(kind);
   if (!topic) return null;
 
-  const response = await anthropic.messages.create({
-    model: config.claudeModel,
+  // Суффикс :online включает веб-поиск на стороне OpenRouter
+  const response = await llm.chat.completions.create({
+    model: `${config.llmModel}:online`,
     max_tokens: 4096,
-    system: RUBRIC_SYSTEM,
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
-    messages: [{ role: "user", content: RUBRIC_PROMPTS[kind](topic) }],
+    messages: [
+      { role: "system", content: RUBRIC_SYSTEM },
+      { role: "user", content: RUBRIC_PROMPTS[kind](topic) },
+    ],
   });
 
-  if (response.stop_reason === "refusal") {
-    throw new Error(`Модель отказалась генерировать рубрику про «${topic}»`);
-  }
-
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("")
-    .trim();
-  if (!text) throw new Error(`Пустой ответ при генерации рубрики про «${topic}»`);
+  const text = contentOf(response);
 
   const newlineIdx = text.indexOf("\n");
   const title = (newlineIdx === -1 ? text : text.slice(0, newlineIdx)).trim();

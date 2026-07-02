@@ -15,7 +15,7 @@ AI-агрегатор новостей для экспатов. Читает Tel
 - [Bun](https://bun.sh) + TypeScript
 - [mtcute](https://mtcute.dev) — чтение каналов от имени личного аккаунта (MTProto)
 - [grammY](https://grammy.dev) — бот модерации и публикации
-- [Anthropic API](https://platform.claude.com) — классификация и суммаризация (structured outputs)
+- [OpenRouter](https://openrouter.ai) — LLM-доступ (классификация со structured outputs, рубрики с веб-поиском `:online`)
 - SQLite (`bun:sqlite`) — состояние и очередь черновиков
 
 ## Запуск
@@ -87,5 +87,6 @@ AI-агрегатор новостей для экспатов. Читает Tel
 [src/classify.ts](src/classify.ts). Категории: safety, visa_docs, transport,
 events, money, weather, infrastructure, other.
 
-Модель по умолчанию — `claude-opus-4-8`; для экономии можно указать
-`CLAUDE_MODEL=claude-haiku-4-5` в `.env`.
+Модель по умолчанию — `anthropic/claude-opus-4.8` (через OpenRouter); для экономии
+можно указать `LLM_MODEL=anthropic/claude-haiku-4.5` в `.env` — или любую другую
+модель с поддержкой structured outputs из [каталога](https://openrouter.ai/models).
