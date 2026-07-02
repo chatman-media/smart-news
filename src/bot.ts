@@ -1,4 +1,6 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { unlink } from "node:fs/promises";
+import { Bot, InlineKeyboard, InputFile } from "grammy";
+import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { adminChatId, config } from "./config";
 import { type Draft, getDraft, setAdminMsgId, setDraftStatus } from "./db";
 
@@ -44,16 +46,50 @@ function renderDraftPreview(d: Draft): string {
   ].join("\n");
 }
 
+// Лимит Bot API на подпись к медиа
+const CAPTION_LIMIT = 1024;
+
+/** Пост с медиа (фото/видео из источника) или текстом, если медиа нет/не влезает подпись. */
+async function sendPost(
+  chatId: number | string,
+  draft: Draft,
+  text: string,
+  replyMarkup?: InlineKeyboardMarkup,
+): Promise<Message> {
+  const opts = { parse_mode: "HTML" as const, reply_markup: replyMarkup };
+  if (draft.media_path && text.length <= CAPTION_LIMIT) {
+    const input = draft.media_path.startsWith("http")
+      ? draft.media_path
+      : new InputFile(draft.media_path);
+    try {
+      if (draft.media_type === "video") {
+        return await bot.api.sendVideo(chatId, input, { ...opts, caption: text });
+      }
+      return await bot.api.sendPhoto(chatId, input, { ...opts, caption: text });
+    } catch (err) {
+      // битый URL из RSS или проблемный файл — не теряем пост, шлём текстом
+      console.error(`Черновик #${draft.id}: медиа не отправилось, шлю текстом:`, err);
+    }
+  }
+  return await bot.api.sendMessage(chatId, text, {
+    ...opts,
+    link_preview_options: { is_disabled: true },
+  });
+}
+
+/** Удаляет локальный медиа-файл черновика (скачанный из Telegram). */
+async function cleanupMedia(draft: Draft): Promise<void> {
+  if (draft.media_path && !draft.media_path.startsWith("http")) {
+    await unlink(draft.media_path).catch(() => {});
+  }
+}
+
 export async function sendDraftToAdmin(draft: Draft): Promise<void> {
   const keyboard = new InlineKeyboard()
     .text("✅ Опубликовать", `pub:${draft.id}`)
     .text("❌ Пропустить", `skip:${draft.id}`);
 
-  const msg = await bot.api.sendMessage(adminChatId(), renderDraftPreview(draft), {
-    parse_mode: "HTML",
-    reply_markup: keyboard,
-    link_preview_options: { is_disabled: true },
-  });
+  const msg = await sendPost(adminChatId(), draft, renderDraftPreview(draft), keyboard);
   setAdminMsgId(draft.id, msg.message_id);
 }
 
@@ -79,10 +115,7 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
 
   if (action === "pub") {
     try {
-      await bot.api.sendMessage(config.channelId, renderPost(draft), {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      });
+      await sendPost(config.channelId, draft, renderPost(draft));
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await ctx.answerCallbackQuery({ text: "Не смог опубликовать", show_alert: true });
@@ -92,18 +125,17 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
       return;
     }
     setDraftStatus(draft.id, "published");
-    await ctx.editMessageText(`${renderDraftPreview(draft)}\n\n✅ <b>Опубликовано</b>`, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    });
+    await cleanupMedia(draft);
+    // editMessageText не работает для медиа-сообщений — просто снимаем кнопки
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     await ctx.answerCallbackQuery({ text: "Опубликовано ✅" });
+    await ctx.reply(`✅ Черновик #${draft.id} опубликован`);
   } else {
     setDraftStatus(draft.id, "skipped");
-    await ctx.editMessageText(`${renderDraftPreview(draft)}\n\n❌ <b>Пропущено</b>`, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    });
+    await cleanupMedia(draft);
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     await ctx.answerCallbackQuery({ text: "Пропущено" });
+    await ctx.reply(`❌ Черновик #${draft.id} пропущен`);
   }
 });
 

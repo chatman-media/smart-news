@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 
-mkdirSync("data", { recursive: true });
+mkdirSync("data/media", { recursive: true });
 
 const db = new Database("data/news.db");
 db.exec("PRAGMA journal_mode = WAL");
@@ -22,6 +22,8 @@ db.exec(`
     category TEXT NOT NULL,
     importance INTEGER NOT NULL,
     tone TEXT NOT NULL DEFAULT 'neutral',
+    media_type TEXT,
+    media_path TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     admin_msg_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -44,6 +46,16 @@ db.exec(`
   );
 `);
 
+// Мягкая миграция для баз, созданных до появления колонки
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const cols = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn("drafts", "media_type", "media_type TEXT");
+ensureColumn("drafts", "media_path", "media_path TEXT");
+
 export interface Draft {
   id: number;
   source: string;
@@ -54,6 +66,8 @@ export interface Draft {
   category: string;
   importance: number;
   tone: string;
+  media_type: string | null;
+  media_path: string | null;
   status: string;
   admin_msg_id: number | null;
   created_at: string;
@@ -80,13 +94,27 @@ export function insertDraft(
   d: Omit<Draft, "id" | "status" | "admin_msg_id" | "created_at">,
 ): Draft | null {
   const row = db
-    .query<Draft, [string, number, string, string, string, string, number, string]>(
-      `INSERT INTO drafts (source, source_msg_id, link, title, summary, category, importance, tone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    .query<
+      Draft,
+      [string, number, string, string, string, string, number, string, string | null, string | null]
+    >(
+      `INSERT INTO drafts (source, source_msg_id, link, title, summary, category, importance, tone, media_type, media_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, source_msg_id) DO NOTHING
        RETURNING *`,
     )
-    .get(d.source, d.source_msg_id, d.link, d.title, d.summary, d.category, d.importance, d.tone);
+    .get(
+      d.source,
+      d.source_msg_id,
+      d.link,
+      d.title,
+      d.summary,
+      d.category,
+      d.importance,
+      d.tone,
+      d.media_type,
+      d.media_path,
+    );
   return row ?? null;
 }
 

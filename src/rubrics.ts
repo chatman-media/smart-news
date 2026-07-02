@@ -68,6 +68,8 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
     category: kind,
     importance: 3,
     tone: "positive",
+    media_type: null,
+    media_path: null,
   });
 }
 

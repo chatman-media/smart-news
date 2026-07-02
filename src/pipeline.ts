@@ -1,4 +1,4 @@
-import type { TelegramClient } from "@mtcute/bun";
+import type { Message, TelegramClient } from "@mtcute/bun";
 import { sendDraftToAdmin } from "./bot";
 import { classify, type Verdict } from "./classify";
 import { config } from "./config";
@@ -29,13 +29,19 @@ export async function runPipeline(tg: TelegramClient): Promise<number> {
   }
 }
 
-/** Классификация + квота негатива + черновик. Возвращает true, если создан черновик. */
+export interface PostMedia {
+  type: "photo" | "video";
+  path: string;
+}
+
+/** Классификация + квота негатива + черновик. Медиа качается лениво — только для прошедших фильтр. */
 async function processPost(post: {
   source: string;
   sourceMsgId: number;
   link: string;
   text: string;
   label: string;
+  fetchMedia?: () => Promise<PostMedia | null>;
 }): Promise<boolean> {
   const verdict: Verdict = await classify(post.text, recentTitles());
   // Квота негатива: критичные предупреждения (importance 5) проходят всегда
@@ -52,6 +58,12 @@ async function processPost(post: {
     console.log(`[${post.label}] отфильтровано: ${verdict.reason}`);
     return false;
   }
+  let media: PostMedia | null = null;
+  try {
+    media = (await post.fetchMedia?.()) ?? null;
+  } catch (err) {
+    console.error(`[${post.label}] медиа не скачалось, пост уйдёт текстом:`, err);
+  }
   const draft = insertDraft({
     source: post.source,
     source_msg_id: post.sourceMsgId,
@@ -61,10 +73,38 @@ async function processPost(post: {
     category: verdict.category,
     importance: verdict.importance,
     tone: verdict.tone,
+    media_type: media?.type ?? null,
+    media_path: media?.path ?? null,
   });
   if (!draft) return false;
   await sendDraftToAdmin(draft);
   return true;
+}
+
+const MAX_VIDEO_BYTES = 45 * 1024 * 1024; // лимит Bot API на выгрузку — 50 МБ, берём с запасом
+
+async function downloadTelegramMedia(
+  tg: TelegramClient,
+  source: string,
+  msg: Message,
+): Promise<PostMedia | null> {
+  const media = msg.media;
+  if (!media) return null;
+  if (media.type === "photo") {
+    const path = `data/media/${source}_${msg.id}.jpg`;
+    await tg.downloadToFile(path, media);
+    return { type: "photo", path };
+  }
+  if (media.type === "video") {
+    if ((media.fileSize ?? 0) > MAX_VIDEO_BYTES) {
+      console.log(`[${source}/${msg.id}] видео больше 45 МБ — пост уйдёт текстом`);
+      return null;
+    }
+    const path = `data/media/${source}_${msg.id}.mp4`;
+    await tg.downloadToFile(path, media);
+    return { type: "video", path };
+  }
+  return null;
 }
 
 async function ingestTelegram(tg: TelegramClient): Promise<number> {
@@ -75,10 +115,10 @@ async function ingestTelegram(tg: TelegramClient): Promise<number> {
     const lastId = getLastMsgId(source.username);
     const limit = lastId === 0 ? config.firstRunLimit : config.perCycleLimit;
 
-    const messages: { id: number; text: string }[] = [];
+    const messages: Message[] = [];
     try {
       for await (const msg of tg.iterHistory(source.username, { limit, minId: lastId })) {
-        messages.push({ id: msg.id, text: msg.text ?? "" });
+        messages.push(msg);
       }
     } catch (err) {
       console.error(`[${source.username}] не удалось получить историю:`, err);
@@ -89,7 +129,7 @@ async function ingestTelegram(tg: TelegramClient): Promise<number> {
     messages.sort((a, b) => a.id - b.id);
 
     for (const msg of messages) {
-      if (msg.text.trim().length < config.minPostLength) {
+      if ((msg.text ?? "").trim().length < config.minPostLength) {
         setLastMsgId(source.username, msg.id);
         continue;
       }
@@ -100,8 +140,9 @@ async function ingestTelegram(tg: TelegramClient): Promise<number> {
             source: source.username,
             sourceMsgId: msg.id,
             link: `https://t.me/${source.username}/${msg.id}`,
-            text: msg.text,
+            text: msg.text ?? "",
             label: `${source.username}/${msg.id}`,
+            fetchMedia: () => downloadTelegramMedia(tg, source.username, msg),
           })
         ) {
           newDrafts++;
@@ -157,6 +198,7 @@ async function ingestRss(): Promise<number> {
             link: item.link,
             text: item.text,
             label: `rss:${feed.name} ${item.link}`,
+            fetchMedia: async () => (item.imageUrl ? { type: "photo", path: item.imageUrl } : null),
           })
         ) {
           newDrafts++;

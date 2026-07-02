@@ -7,6 +7,7 @@ export interface FeedItem {
   title: string;
   text: string;
   link: string;
+  imageUrl: string | null;
 }
 
 const parser = new XMLParser({ ignoreAttributes: false });
@@ -35,6 +36,23 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/** Картинка статьи: enclosure → media:content → первый <img> из html. */
+function imageOf(item: Record<string, unknown>, html: string): string | null {
+  const fromAttr = (node: unknown): string | null => {
+    for (const n of Array.isArray(node) ? node : [node]) {
+      const url = (n as Record<string, unknown> | null)?.["@_url"];
+      if (typeof url === "string" && url.startsWith("http")) return url;
+    }
+    return null;
+  };
+  const enclosure = fromAttr(item.enclosure);
+  if (enclosure) return enclosure;
+  const mediaContent = fromAttr(item["media:content"]) ?? fromAttr(item["media:thumbnail"]);
+  if (mediaContent) return mediaContent;
+  const img = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i);
+  return img?.[1] ?? null;
+}
+
 export async function fetchFeedItems(feed: Feed, limit: number): Promise<FeedItem[]> {
   const response = await fetch(feed.url, {
     headers: { "user-agent": USER_AGENT, accept: "application/rss+xml, application/xml, text/xml" },
@@ -55,9 +73,16 @@ export async function fetchFeedItems(feed: Feed, limit: number): Promise<FeedIte
     const title = stripHtml(textOf(item.title));
     const link = textOf(item.link).trim();
     const guid = textOf(item.guid).trim() || link;
-    const body = stripHtml(textOf(item["content:encoded"]) || textOf(item.description));
+    const rawHtml = textOf(item["content:encoded"]) || textOf(item.description);
+    const body = stripHtml(rawHtml);
     if (!guid || !title) continue;
-    result.push({ guid, title, link, text: `${title}\n\n${body}` });
+    result.push({
+      guid,
+      title,
+      link,
+      text: `${title}\n\n${body}`,
+      imageUrl: imageOf(item, rawHtml),
+    });
   }
   return result;
 }
