@@ -78,10 +78,19 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
   }
 
   if (action === "pub") {
-    await bot.api.sendMessage(config.channelId, renderPost(draft), {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-    });
+    try {
+      await bot.api.sendMessage(config.channelId, renderPost(draft), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await ctx.answerCallbackQuery({ text: "Не смог опубликовать", show_alert: true });
+      await ctx.reply(
+        `Публикация не удалась: ${reason}\n\nПроверь CHANNEL_ID в .env — там должен быть юзернейм канала (не бота), а бот — админом канала с правом публикации. После правки перезапусти bun start и нажми кнопку ещё раз.`,
+      );
+      return;
+    }
     setDraftStatus(draft.id, "published");
     await ctx.editMessageText(`${renderDraftPreview(draft)}\n\n✅ <b>Опубликовано</b>`, {
       parse_mode: "HTML",
@@ -97,6 +106,32 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Пропущено" });
   }
 });
+
+// Любая необработанная ошибка в хендлерах логируется, но не роняет бота
+bot.catch((err) => {
+  const reason = err.error instanceof Error ? err.error.message : String(err.error);
+  console.error(`Ошибка бота (update ${err.ctx.update.update_id}): ${reason}`);
+});
+
+/** Проверка канала публикации при старте — понятное предупреждение вместо падения на первой кнопке. */
+export async function validateChannel(): Promise<void> {
+  const me = await bot.api.getMe();
+  const target = typeof config.channelId === "string" ? config.channelId.replace("@", "") : "";
+  if (target && me.username && target.toLowerCase() === me.username.toLowerCase()) {
+    console.warn(
+      "ВНИМАНИЕ: CHANNEL_ID указывает на самого бота — публикация не сработает. Впиши в .env юзернейм КАНАЛА и перезапусти.",
+    );
+    return;
+  }
+  try {
+    await bot.api.getChat(config.channelId);
+    console.log(`Канал публикации: ${config.channelId}`);
+  } catch {
+    console.warn(
+      `ВНИМАНИЕ: канал ${config.channelId} недоступен боту — проверь CHANNEL_ID в .env и что бот добавлен админом с правом публикации.`,
+    );
+  }
+}
 
 /** Регистрирует админ-команды. */
 export function registerAdminCommands(

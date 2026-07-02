@@ -1,4 +1,4 @@
-import { bot, registerAdminCommands, sendDraftToAdmin } from "./bot";
+import { bot, registerAdminCommands, sendDraftToAdmin, validateChannel } from "./bot";
 import { config } from "./config";
 import { runPipeline } from "./pipeline";
 import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubric } from "./rubrics";
@@ -11,6 +11,7 @@ console.log(`MTProto: подключено как ${self.displayName} (id ${self
 
 ensureTopicsSeeded();
 
+await validateChannel();
 registerAdminCommands(() => runPipeline(tg), generateRubric);
 void bot.start({
   onStart: (me) => console.log(`Бот: @${me.username} запущен`),
