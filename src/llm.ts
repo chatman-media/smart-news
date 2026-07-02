@@ -38,6 +38,34 @@ export function parseJsonLoose<T>(raw: string): T {
   throw new Error(`Модель вернула не-JSON: ${text.slice(0, 200)}`);
 }
 
+const EMBEDDING_MODEL = "openai/text-embedding-3-small";
+
+/** Embedding текста (для дедупа сюжетов). */
+export async function embed(text: string): Promise<Float32Array> {
+  const res = await llm.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: text.slice(0, 4000),
+  });
+  const vector = res.data[0]?.embedding;
+  if (!vector?.length) throw new Error("Пустой embedding");
+  return Float32Array.from(vector);
+}
+
+export function cosine(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] as number;
+    const y = b[i] as number;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+}
+
 /** Достаёт текст ответа; убирает возможные ```-ограждения вокруг JSON. */
 export function contentOf(completion: OpenAI.Chat.ChatCompletion): string {
   const message = completion.choices[0]?.message;

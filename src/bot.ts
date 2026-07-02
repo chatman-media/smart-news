@@ -2,7 +2,17 @@ import { unlink } from "node:fs/promises";
 import { Bot, InlineKeyboard, InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { adminChatId, config } from "./config";
-import { type Draft, getDraft, setAdminMsgId, setDraftStatus } from "./db";
+import {
+  type Draft,
+  getDraft,
+  getScoutCandidate,
+  listDraftSources,
+  type ScoutCandidate,
+  setAdminMsgId,
+  setDraftStatus,
+  setScoutStatus,
+} from "./db";
+import { addSource } from "./sources";
 
 export const bot = new Bot(config.botToken);
 
@@ -23,10 +33,21 @@ function escapeHtml(s: string): string {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+function sourceLabel(source: string): string {
+  return source.startsWith("rss:") ? source.slice(4) : `@${source}`;
+}
+
 function renderPost(d: Draft): string {
   const emoji = CATEGORY_EMOJI[d.category] ?? "📌";
   const lines = [`${emoji} <b>${escapeHtml(d.title)}</b>`, "", escapeHtml(d.summary)];
-  if (d.link) {
+  const extras = listDraftSources(d.id);
+  if (d.link && extras.length > 0) {
+    const all = [
+      `<a href="${d.link}">${escapeHtml(sourceLabel(d.source))}</a>`,
+      ...extras.map((s) => `<a href="${s.link}">${escapeHtml(sourceLabel(s.source))}</a>`),
+    ];
+    lines.push("", `Источники: ${all.join(" · ")}`);
+  } else if (d.link) {
     lines.push("", `<a href="${d.link}">Источник</a>`);
   }
   return lines.join("\n");
@@ -84,13 +105,56 @@ async function cleanupMedia(draft: Draft): Promise<void> {
   }
 }
 
-export async function sendDraftToAdmin(draft: Draft): Promise<void> {
-  const keyboard = new InlineKeyboard()
-    .text("✅ Опубликовать", `pub:${draft.id}`)
-    .text("❌ Пропустить", `skip:${draft.id}`);
+function draftKeyboard(draftId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✅ Опубликовать", `pub:${draftId}`)
+    .text("❌ Пропустить", `skip:${draftId}`);
+}
 
-  const msg = await sendPost(adminChatId(), draft, renderDraftPreview(draft), keyboard);
+export async function sendDraftToAdmin(draft: Draft): Promise<void> {
+  const msg = await sendPost(
+    adminChatId(),
+    draft,
+    renderDraftPreview(draft),
+    draftKeyboard(draft.id),
+  );
   setAdminMsgId(draft.id, msg.message_id);
+}
+
+/** Обновляет превью черновика в личке (например, когда к сюжету добавился источник). */
+export async function refreshDraftPreview(draftId: number): Promise<void> {
+  const draft = getDraft(draftId);
+  if (!draft || draft.status !== "pending" || !draft.admin_msg_id) return;
+  const text = renderDraftPreview(draft);
+  const opts = { parse_mode: "HTML" as const, reply_markup: draftKeyboard(draft.id) };
+  try {
+    if (draft.media_path) {
+      await bot.api.editMessageCaption(adminChatId(), draft.admin_msg_id, {
+        ...opts,
+        caption: text,
+      });
+    } else {
+      await bot.api.editMessageText(adminChatId(), draft.admin_msg_id, text, {
+        ...opts,
+        link_preview_options: { is_disabled: true },
+      });
+    }
+  } catch (err) {
+    console.error(`Черновик #${draftId}: не удалось обновить превью:`, err);
+  }
+}
+
+export async function sendScoutCandidateToAdmin(c: ScoutCandidate): Promise<void> {
+  const label = c.kind === "channel" ? `Telegram-канал @${c.ref}` : `RSS-фид ${c.ref}`;
+  const link = c.kind === "channel" ? `https://t.me/${c.ref}` : c.ref;
+  const keyboard = new InlineKeyboard()
+    .text("➕ Добавить", `scoutadd:${c.id}`)
+    .text("🚫 Не надо", `scoutno:${c.id}`);
+  await bot.api.sendMessage(
+    adminChatId(),
+    `🔭 <b>Скаут нашёл источник</b>\n\n${escapeHtml(label)}\n${escapeHtml(c.note)}\n\n<a href="${link}">Посмотреть</a>`,
+    { parse_mode: "HTML", reply_markup: keyboard, link_preview_options: { is_disabled: true } },
+  );
 }
 
 function isAdmin(userId: number | undefined): boolean {
@@ -139,6 +203,41 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^(scoutadd|scoutno):(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) {
+    await ctx.answerCallbackQuery({ text: "Не твоя кнопка" });
+    return;
+  }
+  const action = ctx.match[1];
+  const candidate = getScoutCandidate(Number(ctx.match[2]));
+  if (!candidate) {
+    await ctx.answerCallbackQuery({ text: "Кандидат не найден" });
+    return;
+  }
+  if (candidate.status !== "pending") {
+    await ctx.answerCallbackQuery({ text: `Уже обработан: ${candidate.status}` });
+    return;
+  }
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  if (action === "scoutadd") {
+    const added = await addSource(
+      candidate.kind as "channel" | "rss",
+      candidate.ref,
+      candidate.note,
+    );
+    setScoutStatus(candidate.id, "added");
+    await ctx.answerCallbackQuery({ text: "Добавлен" });
+    await ctx.reply(
+      added
+        ? `➕ Источник ${candidate.ref} добавлен — подхватится в следующем цикле`
+        : `Источник ${candidate.ref} уже был в списке`,
+    );
+  } else {
+    setScoutStatus(candidate.id, "rejected");
+    await ctx.answerCallbackQuery({ text: "Ок, не буду предлагать снова" });
+  }
+});
+
 // Любая необработанная ошибка в хендлерах логируется, но не роняет бота
 bot.catch((err) => {
   const reason = err.error instanceof Error ? err.error.message : String(err.error);
@@ -169,7 +268,19 @@ export async function validateChannel(): Promise<void> {
 export function registerAdminCommands(
   runNow: () => Promise<number>,
   makeRubric: (kind: "place" | "activity") => Promise<Draft | null>,
+  scoutNow: () => Promise<number>,
 ): void {
+  bot.command("scout", async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    await ctx.reply("Ищу новые источники (займёт минуту)…");
+    try {
+      const sent = await scoutNow();
+      await ctx.reply(sent > 0 ? `Нашёл ${sent} кандидатов — смотри выше` : "Новых кандидатов нет");
+    } catch (err) {
+      await ctx.reply(`Ошибка: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
   bot.command("rubric", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     const kind = ctx.match?.trim() === "activity" ? "activity" : "place";
@@ -200,7 +311,7 @@ export function registerAdminCommands(
   bot.command("start", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.reply(
-      "Я собираю новости из каналов-источников, фильтрую через Claude и присылаю сюда черновики с кнопками. /check — проверить источники сейчас, /rubric [place|activity] — сгенерировать рубрику.",
+      "Я собираю новости из источников, фильтрую через LLM, склеиваю дубли в сюжеты и присылаю сюда черновики с кнопками. /check — проверить источники сейчас, /rubric [place|activity] — сгенерировать рубрику, /scout — поискать новые источники.",
     );
   });
 }

@@ -44,6 +44,28 @@ db.exec(`
     last_used_at TEXT,
     UNIQUE(kind, topic)
   );
+
+  CREATE TABLE IF NOT EXISTS draft_sources (
+    draft_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    link TEXT NOT NULL,
+    PRIMARY KEY (draft_id, link)
+  );
+
+  CREATE TABLE IF NOT EXISTS scout_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(kind, ref)
+  );
+
+  CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Мягкая миграция для баз, созданных до появления колонки
@@ -55,6 +77,7 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 }
 ensureColumn("drafts", "media_type", "media_type TEXT");
 ensureColumn("drafts", "media_path", "media_path TEXT");
+ensureColumn("drafts", "embedding", "embedding BLOB");
 
 export interface Draft {
   id: number;
@@ -204,10 +227,99 @@ export function markRubricTopicUsed(kind: string, topic: string): void {
   ]);
 }
 
-/** Заголовки недавних черновиков — для дедупликации на стороне LLM. */
-export function recentTitles(limit = 30): string[] {
+export function setDraftEmbedding(id: number, vector: Float32Array): void {
+  db.run("UPDATE drafts SET embedding = ? WHERE id = ?", [
+    Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength),
+    id,
+  ]);
+}
+
+export interface StoryCandidate {
+  id: number;
+  title: string;
+  status: string;
+  embedding: Float32Array;
+}
+
+/** Недавние черновики с embedding — база для дедупа сюжетов. */
+export function recentStories(hours = 72): StoryCandidate[] {
   const rows = db
-    .query<{ title: string }, [number]>("SELECT title FROM drafts ORDER BY id DESC LIMIT ?")
-    .all(limit);
-  return rows.map((r) => r.title);
+    .query<{ id: number; title: string; status: string; embedding: Uint8Array | null }, [string]>(
+      `SELECT id, title, status, embedding FROM drafts
+       WHERE source != 'rubric' AND embedding IS NOT NULL
+         AND created_at >= datetime('now', ?)
+       ORDER BY id DESC LIMIT 200`,
+    )
+    .all(`-${hours} hours`);
+  return rows.map((r) => {
+    const buf = r.embedding as Uint8Array;
+    return {
+      id: r.id,
+      title: r.title,
+      status: r.status,
+      embedding: new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4),
+    };
+  });
+}
+
+export function addDraftSource(draftId: number, source: string, link: string): void {
+  db.run(
+    "INSERT INTO draft_sources (draft_id, source, link) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+    [draftId, source, link],
+  );
+}
+
+export function listDraftSources(draftId: number): { source: string; link: string }[] {
+  return db
+    .query<{ source: string; link: string }, [number]>(
+      "SELECT source, link FROM draft_sources WHERE draft_id = ? ORDER BY rowid",
+    )
+    .all(draftId);
+}
+
+export function kvGet(key: string): string | null {
+  const row = db.query<{ value: string }, [string]>("SELECT value FROM kv WHERE key = ?").get(key);
+  return row?.value ?? null;
+}
+
+export function kvSet(key: string, value: string): void {
+  db.run(
+    "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    [key, value],
+  );
+}
+
+export interface ScoutCandidate {
+  id: number;
+  kind: string;
+  ref: string;
+  note: string;
+  status: string;
+}
+
+/** null, если такой кандидат уже был (не предлагаем повторно). */
+export function insertScoutCandidate(
+  kind: string,
+  ref: string,
+  note: string,
+): ScoutCandidate | null {
+  return (
+    db
+      .query<ScoutCandidate, [string, string, string]>(
+        `INSERT INTO scout_candidates (kind, ref, note) VALUES (?, ?, ?)
+         ON CONFLICT(kind, ref) DO NOTHING RETURNING *`,
+      )
+      .get(kind, ref, note) ?? null
+  );
+}
+
+export function getScoutCandidate(id: number): ScoutCandidate | null {
+  return (
+    db.query<ScoutCandidate, [number]>("SELECT * FROM scout_candidates WHERE id = ?").get(id) ??
+    null
+  );
+}
+
+export function setScoutStatus(id: number, status: string): void {
+  db.run("UPDATE scout_candidates SET status = ? WHERE id = ?", [status, id]);
 }
