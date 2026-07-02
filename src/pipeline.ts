@@ -2,7 +2,7 @@ import type { TelegramClient } from "@mtcute/bun";
 import { sendDraftToAdmin } from "./bot";
 import { classify } from "./classify";
 import { config } from "./config";
-import { getLastMsgId, insertDraft, recentTitles, setLastMsgId } from "./db";
+import { getLastMsgId, insertDraft, negativeShare, recentTitles, setLastMsgId } from "./db";
 import { loadSources } from "./sources";
 
 let running = false;
@@ -47,6 +47,16 @@ async function runPipelineInner(tg: TelegramClient): Promise<number> {
 
       try {
         const verdict = await classify(msg.text, recentTitles());
+        // Квота негатива: критичные предупреждения (importance 5) проходят всегда
+        if (
+          verdict.keep &&
+          verdict.tone === "negative" &&
+          verdict.importance < 5 &&
+          negativeShare() * 100 >= config.negativeQuotaPct
+        ) {
+          verdict.keep = false;
+          verdict.reason = "negative_quota";
+        }
         if (verdict.keep) {
           const draft = insertDraft({
             source: source.username,
@@ -56,6 +66,7 @@ async function runPipelineInner(tg: TelegramClient): Promise<number> {
             summary: verdict.summary,
             category: verdict.category,
             importance: verdict.importance,
+            tone: verdict.tone,
           });
           if (draft) {
             await sendDraftToAdmin(draft);

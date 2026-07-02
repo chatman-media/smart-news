@@ -21,10 +21,19 @@ db.exec(`
     summary TEXT NOT NULL,
     category TEXT NOT NULL,
     importance INTEGER NOT NULL,
+    tone TEXT NOT NULL DEFAULT 'neutral',
     status TEXT NOT NULL DEFAULT 'pending',
     admin_msg_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(source, source_msg_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS rubric_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    last_used_at TEXT,
+    UNIQUE(kind, topic)
   );
 `);
 
@@ -37,6 +46,7 @@ export interface Draft {
   summary: string;
   category: string;
   importance: number;
+  tone: string;
   status: string;
   admin_msg_id: number | null;
   created_at: string;
@@ -63,13 +73,13 @@ export function insertDraft(
   d: Omit<Draft, "id" | "status" | "admin_msg_id" | "created_at">,
 ): Draft | null {
   const row = db
-    .query<Draft, [string, number, string, string, string, string, number]>(
-      `INSERT INTO drafts (source, source_msg_id, link, title, summary, category, importance)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+    .query<Draft, [string, number, string, string, string, string, number, string]>(
+      `INSERT INTO drafts (source, source_msg_id, link, title, summary, category, importance, tone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, source_msg_id) DO NOTHING
        RETURNING *`,
     )
-    .get(d.source, d.source_msg_id, d.link, d.title, d.summary, d.category, d.importance);
+    .get(d.source, d.source_msg_id, d.link, d.title, d.summary, d.category, d.importance, d.tone);
   return row ?? null;
 }
 
@@ -83,6 +93,67 @@ export function setDraftStatus(id: number, status: string): void {
 
 export function setAdminMsgId(id: number, adminMsgId: number): void {
   db.run("UPDATE drafts SET admin_msg_id = ? WHERE id = ?", [adminMsgId, id]);
+}
+
+/** Доля негативных постов среди новостных черновиков за последние N дней (0..1). */
+export function negativeShare(days = 7): number {
+  const row = db
+    .query<{ total: number; negative: number }, [string]>(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN tone = 'negative' THEN 1 ELSE 0 END) AS negative
+       FROM drafts
+       WHERE source != 'rubric' AND status != 'skipped'
+         AND created_at >= datetime('now', ?)`,
+    )
+    .get(`-${days} days`);
+  if (!row || row.total === 0) return 0;
+  return row.negative / row.total;
+}
+
+/** Была ли уже сегодня сгенерирована рубрика. */
+export function hasRubricToday(): boolean {
+  const row = db
+    .query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM drafts
+       WHERE source = 'rubric' AND date(created_at) = date('now')`,
+    )
+    .get();
+  return (row?.n ?? 0) > 0;
+}
+
+/** Категория последней рубрики — чтобы чередовать «место» и «занятие». */
+export function lastRubricCategory(): string | null {
+  const row = db
+    .query<{ category: string }, []>(
+      "SELECT category FROM drafts WHERE source = 'rubric' ORDER BY id DESC LIMIT 1",
+    )
+    .get();
+  return row?.category ?? null;
+}
+
+export function seedRubricTopics(kind: string, topics: string[]): void {
+  const stmt = db.prepare(
+    "INSERT INTO rubric_topics (kind, topic) VALUES (?, ?) ON CONFLICT(kind, topic) DO NOTHING",
+  );
+  for (const topic of topics) stmt.run(kind, topic);
+}
+
+/** Самая давно не использованная тема рубрики. */
+export function pickRubricTopic(kind: string): string | null {
+  const row = db
+    .query<{ topic: string }, [string]>(
+      `SELECT topic FROM rubric_topics WHERE kind = ?
+       ORDER BY last_used_at IS NOT NULL, last_used_at ASC, RANDOM() LIMIT 1`,
+    )
+    .get(kind);
+  return row?.topic ?? null;
+}
+
+export function markRubricTopicUsed(kind: string, topic: string): void {
+  db.run("UPDATE rubric_topics SET last_used_at = datetime('now') WHERE kind = ? AND topic = ?", [
+    kind,
+    topic,
+  ]);
 }
 
 /** Заголовки недавних черновиков — для дедупликации на стороне LLM. */

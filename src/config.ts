@@ -16,6 +16,10 @@ export const config = {
   channelId: parseChatId(required("CHANNEL_ID")),
   claudeModel: process.env.CLAUDE_MODEL || "claude-opus-4-8",
   pollIntervalMin: Number(process.env.POLL_INTERVAL_MIN || "10"),
+  // Максимальная доля негатива в фиде, % (важность 5 — предупреждения о безопасности — проходят всегда)
+  negativeQuotaPct: Number(process.env.NEGATIVE_QUOTA_PCT || "20"),
+  // Час (локальное время сервера), после которого генерируется ежедневная рубрика
+  rubricHour: Number(process.env.RUBRIC_HOUR || "10"),
   // На первом запуске берём только хвост канала, чтобы не сжечь токены на архиве
   firstRunLimit: 10,
   perCycleLimit: 50,

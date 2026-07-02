@@ -1,0 +1,89 @@
+// Ежедневные авторские рубрики: генерируются Claude с живым веб-поиском, а не парсятся.
+import Anthropic from "@anthropic-ai/sdk";
+import { config } from "./config";
+import {
+  type Draft,
+  hasRubricToday,
+  insertDraft,
+  lastRubricCategory,
+  markRubricTopicUsed,
+  pickRubricTopic,
+  seedRubricTopics,
+} from "./db";
+import { ACTIVITIES, PLACES } from "./rubric-topics";
+
+const anthropic = new Anthropic();
+
+export type RubricKind = "place" | "activity";
+
+const RUBRIC_PROMPTS: Record<RubricKind, (topic: string) => string> = {
+  place: (topic) =>
+    `Напиши пост рубрики «Уголок Таиланда» про: ${topic}.
+Расскажи живо и конкретно: что это за место, чем там занимаются туристы и чем живут местные, что стоит попробовать, лайфхак от своих. Если через веб-поиск найдёшь что-то актуальное (сезон, события, изменения) — вплети.`,
+  activity: (topic) =>
+    `Напиши пост рубрики «Чем заняться в Тае» про: ${topic}.
+Конкретика для экспата на Пхукете: где, почём примерно, с чего начать, на что обратить внимание. Если через веб-поиск найдёшь актуальные детали — используй.`,
+};
+
+const RUBRIC_SYSTEM = `Ты — автор Telegram-канала для русскоязычных экспатов на Пхукете и в Таиланде.
+Пиши на русском, дружелюбно и по делу, без канцелярита, без рекламных интонаций и без выдуманных фактов. Цены и часы работы указывай только если уверен или нашёл в поиске, иначе обходись без них.
+
+Формат ответа строго такой:
+- первая строка — заголовок (до 70 символов, без эмодзи и кавычек)
+- пустая строка
+- 2–4 коротких абзаца текста (всего 400–800 символов)`;
+
+export function ensureTopicsSeeded(): void {
+  seedRubricTopics("place", PLACES);
+  seedRubricTopics("activity", ACTIVITIES);
+}
+
+export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
+  const topic = pickRubricTopic(kind);
+  if (!topic) return null;
+
+  const response = await anthropic.messages.create({
+    model: config.claudeModel,
+    max_tokens: 4096,
+    system: RUBRIC_SYSTEM,
+    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
+    messages: [{ role: "user", content: RUBRIC_PROMPTS[kind](topic) }],
+  });
+
+  if (response.stop_reason === "refusal") {
+    throw new Error(`Модель отказалась генерировать рубрику про «${topic}»`);
+  }
+
+  const text = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  if (!text) throw new Error(`Пустой ответ при генерации рубрики про «${topic}»`);
+
+  const newlineIdx = text.indexOf("\n");
+  const title = (newlineIdx === -1 ? text : text.slice(0, newlineIdx)).trim();
+  const body = (newlineIdx === -1 ? "" : text.slice(newlineIdx)).trim();
+  if (!title || !body) throw new Error(`Не удалось распарсить рубрику про «${topic}»`);
+
+  markRubricTopicUsed(kind, topic);
+
+  return insertDraft({
+    source: "rubric",
+    source_msg_id: Date.now(),
+    link: "",
+    title,
+    summary: body,
+    category: kind,
+    importance: 3,
+    tone: "positive",
+  });
+}
+
+/** Раз в день после config.rubricHour генерирует рубрику, чередуя «место» и «занятие». */
+export async function maybeGenerateDailyRubric(): Promise<Draft | null> {
+  if (new Date().getHours() < config.rubricHour) return null;
+  if (hasRubricToday()) return null;
+  const kind: RubricKind = lastRubricCategory() === "place" ? "activity" : "place";
+  return generateRubric(kind);
+}

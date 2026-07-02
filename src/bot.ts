@@ -13,6 +13,8 @@ const CATEGORY_EMOJI: Record<string, string> = {
   weather: "🌧",
   infrastructure: "🔧",
   other: "📌",
+  place: "🌴",
+  activity: "🤿",
 };
 
 function escapeHtml(s: string): string {
@@ -21,18 +23,17 @@ function escapeHtml(s: string): string {
 
 function renderPost(d: Draft): string {
   const emoji = CATEGORY_EMOJI[d.category] ?? "📌";
-  return [
-    `${emoji} <b>${escapeHtml(d.title)}</b>`,
-    "",
-    escapeHtml(d.summary),
-    "",
-    `<a href="${d.link}">Источник</a>`,
-  ].join("\n");
+  const lines = [`${emoji} <b>${escapeHtml(d.title)}</b>`, "", escapeHtml(d.summary)];
+  if (d.link) {
+    lines.push("", `<a href="${d.link}">Источник</a>`);
+  }
+  return lines.join("\n");
 }
 
 function renderDraftPreview(d: Draft): string {
+  const origin = d.source === "rubric" ? "рубрика" : `@${d.source}`;
   return [
-    `<b>Черновик #${d.id}</b> · ${d.category} · важность ${d.importance}/5 · @${d.source}`,
+    `<b>Черновик #${d.id}</b> · ${d.category} · ${d.tone} · важность ${d.importance}/5 · ${origin}`,
     "",
     renderPost(d),
   ].join("\n");
@@ -92,8 +93,27 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
   }
 });
 
-/** Регистрирует админ-команды; runNow — ручной прогон пайплайна. */
-export function registerAdminCommands(runNow: () => Promise<number>): void {
+/** Регистрирует админ-команды. */
+export function registerAdminCommands(
+  runNow: () => Promise<number>,
+  makeRubric: (kind: "place" | "activity") => Promise<Draft | null>,
+): void {
+  bot.command("rubric", async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    const kind = ctx.match?.trim() === "activity" ? "activity" : "place";
+    await ctx.reply(`Генерирую рубрику (${kind})…`);
+    try {
+      const draft = await makeRubric(kind);
+      if (draft) {
+        await sendDraftToAdmin(draft);
+      } else {
+        await ctx.reply("Не получилось: нет свободной темы");
+      }
+    } catch (err) {
+      await ctx.reply(`Ошибка: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
   bot.command("check", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.reply("Проверяю источники…");
@@ -108,7 +128,7 @@ export function registerAdminCommands(runNow: () => Promise<number>): void {
   bot.command("start", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.reply(
-      "Я собираю новости из каналов-источников, фильтрую через Claude и присылаю сюда черновики с кнопками. /check — проверить источники сейчас.",
+      "Я собираю новости из каналов-источников, фильтрую через Claude и присылаю сюда черновики с кнопками. /check — проверить источники сейчас, /rubric [place|activity] — сгенерировать рубрику.",
     );
   });
 }
