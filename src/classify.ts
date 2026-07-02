@@ -1,5 +1,5 @@
 import { config } from "./config";
-import { contentOf, llm } from "./llm";
+import { contentOf, llm, OPENROUTER_EXTRAS, parseJsonLoose } from "./llm";
 
 export const CATEGORIES = [
   "safety",
@@ -87,18 +87,37 @@ export async function classify(postText: string, recentDraftTitles: string[]): P
     .filter(Boolean)
     .join("\n\n");
 
-  const response = await llm.chat.completions.create({
-    model: config.llmModel,
-    max_tokens: 1500,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: { name: "verdict", strict: true, schema: VERDICT_SCHEMA },
-    },
-  });
+  // Одна повторная попытка: некоторые провайдеры изредка отдают кривой JSON даже со схемой
+  for (let attempt = 1; ; attempt++) {
+    const response = await llm.chat.completions.create({
+      model: config.llmModel,
+      max_tokens: 1500,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "verdict", strict: true, schema: VERDICT_SCHEMA },
+      },
+      ...(OPENROUTER_EXTRAS as object),
+    });
 
-  return JSON.parse(contentOf(response)) as Verdict;
+    try {
+      return validateVerdict(parseJsonLoose<Verdict>(contentOf(response)));
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      console.error("Кривой ответ классификатора, повторяю запрос:", err);
+    }
+  }
+}
+
+function validateVerdict(v: Verdict): Verdict {
+  if (typeof v.keep !== "boolean" || typeof v.title !== "string" || typeof v.summary !== "string") {
+    throw new Error(`Вердикт не по схеме: ${JSON.stringify(v).slice(0, 200)}`);
+  }
+  if (!CATEGORIES.includes(v.category)) v.category = "other";
+  if (!["negative", "neutral", "positive"].includes(v.tone)) v.tone = "neutral";
+  if (![1, 2, 3, 4, 5].includes(v.importance)) v.importance = 3;
+  return v;
 }
