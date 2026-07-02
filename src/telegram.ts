@@ -1,4 +1,4 @@
-import { TelegramClient } from "@mtcute/bun";
+import { TelegramClient, type User } from "@mtcute/bun";
 import { config } from "./config";
 
 export function createTelegram(): TelegramClient {
@@ -10,9 +10,9 @@ export function createTelegram(): TelegramClient {
 }
 
 /** Подключение с уже сохранённой сессией; без сессии — понятная ошибка. */
-export async function connectAuthorized(tg: TelegramClient): Promise<void> {
+export async function connectAuthorized(tg: TelegramClient): Promise<User> {
   const fail = (): never => {
     throw new Error("Сессия Telegram не найдена — сначала запусти `bun run login`");
   };
-  await tg.start({ phone: fail, code: fail, password: fail });
+  return await tg.start({ phone: fail, code: fail, password: fail });
 }

@@ -9,6 +9,11 @@ const self = await tg.start({
   password: () => tg.input("Пароль 2FA > "),
 });
 
-console.log(`Вход выполнен: ${self.displayName}. Сессия сохранена, теперь можно \`bun start\`.`);
+console.log(
+  `Вход выполнен: ${self.displayName} (id ${self.id}). Сессия сохранена, теперь можно \`bun start\`.`,
+);
+console.log(
+  "Черновики будут приходить в личку этого аккаунта (ADMIN_CHAT_ID в .env можно не заполнять).",
+);
 await tg.destroy();
 process.exit(0);

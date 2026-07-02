@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
-import { config } from "./config";
+import { adminChatId, config } from "./config";
 import { type Draft, getDraft, setAdminMsgId, setDraftStatus } from "./db";
 
 export const bot = new Bot(config.botToken);
@@ -49,7 +49,7 @@ export async function sendDraftToAdmin(draft: Draft): Promise<void> {
     .text("✅ Опубликовать", `pub:${draft.id}`)
     .text("❌ Пропустить", `skip:${draft.id}`);
 
-  const msg = await bot.api.sendMessage(config.adminChatId, renderDraftPreview(draft), {
+  const msg = await bot.api.sendMessage(adminChatId(), renderDraftPreview(draft), {
     parse_mode: "HTML",
     reply_markup: keyboard,
     link_preview_options: { is_disabled: true },
@@ -58,7 +58,7 @@ export async function sendDraftToAdmin(draft: Draft): Promise<void> {
 }
 
 function isAdmin(userId: number | undefined): boolean {
-  return userId === config.adminChatId;
+  return userId != null && userId === config.adminChatId;
 }
 
 bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {

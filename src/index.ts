@@ -5,8 +5,9 @@ import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubric } from "./
 import { connectAuthorized, createTelegram } from "./telegram";
 
 const tg = createTelegram();
-await connectAuthorized(tg);
-console.log("MTProto: подключено");
+const self = await connectAuthorized(tg);
+config.adminChatId ??= self.id;
+console.log(`MTProto: подключено как ${self.displayName} (id ${self.id})`);
 
 ensureTopicsSeeded();
 
