@@ -39,6 +39,8 @@ export const config = {
   rssFirstRunLimit: 5,
   rssPerCycleLimit: 20,
   minPostLength: 40,
+  // Для видео-постов (рилсов) хватает короткой подписи
+  minVideoCaptionLength: 8,
   maxPostLength: 4000,
 };
 

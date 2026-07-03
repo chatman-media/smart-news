@@ -279,7 +279,10 @@ async function gatherTelegram(tg: TelegramClient, channel: Channel): Promise<New
 
     for (const msg of messages) {
       const text = (msg.text ?? "").trim();
-      if (text.length < config.minPostLength) {
+      // Видео-постам (рилсам) хватает короткой подписи — остальным нужен полноценный текст
+      const isVideo = msg.media?.type === "video";
+      const minLength = isVideo ? config.minVideoCaptionLength : config.minPostLength;
+      if (text.length < minLength) {
         setLastMsgId(channel.id, username, msg.id);
         continue;
       }
@@ -287,8 +290,8 @@ async function gatherTelegram(tg: TelegramClient, channel: Channel): Promise<New
         source: username,
         sourceMsgId: msg.id,
         link: `https://t.me/${username}/${msg.id}`,
-        text,
-        headline: text.split("\n")[0]?.slice(0, 120) ?? "",
+        text: isVideo ? `[видео-пост] ${text}` : text,
+        headline: `${isVideo ? "🎬 " : ""}${text.split("\n")[0]?.slice(0, 120) ?? ""}`,
         label: `${username}/${msg.id}`,
         markSeen: () => setLastMsgId(channel.id, username, msg.id),
         fetchMedia: () => downloadTelegramMedia(tg, username, msg),
