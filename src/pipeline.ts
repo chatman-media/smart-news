@@ -16,7 +16,7 @@ import {
 } from "./db";
 import { cosine, embed } from "./llm";
 import { generateIllustration, imageFits } from "./media-ai";
-import { fetchFeedItems, guidToId } from "./rss";
+import { extractArticleVideo, fetchFeedItems, guidToId } from "./rss";
 import { loadFeeds, loadSources } from "./sources";
 
 let running = false;
@@ -42,7 +42,8 @@ export async function runPipeline(tg: TelegramClient): Promise<number> {
 }
 
 export interface PostMedia {
-  type: "photo" | "video";
+  // video_link — ссылка на видео (YouTube/FB/TikTok): пост уходит текстом с большим видео-превью
+  type: "photo" | "video" | "video_link";
   path: string;
 }
 
@@ -136,6 +137,14 @@ async function processCandidate(post: NewPost): Promise<boolean> {
     media = (await post.fetchMedia?.()) ?? null;
   } catch (err) {
     console.error(`[${post.label}] медиа не скачалось:`, err);
+  }
+  // Новости из RSS часто про виральные ролики — ищем встроенное видео на странице статьи
+  if (post.source.startsWith("rss:") && media?.type !== "video" && media?.type !== "video_link") {
+    const videoUrl = await extractArticleVideo(post.link).catch(() => null);
+    if (videoUrl) {
+      console.log(`[${post.label}] найдено видео в статье: ${videoUrl}`);
+      media = { type: "video_link", path: videoUrl };
+    }
   }
   // Картинки из RSS бывают логотипами/заглушками — проверяем vision-моделью
   // (превью YouTube всегда от самого видео, их не трогаем)
@@ -306,7 +315,13 @@ async function gatherRss(): Promise<NewPost[]> {
         headline: item.title.slice(0, 120),
         label: `rss:${feed.name} ${item.link}`,
         markSeen: () => markRssSeen(feed.name, item.guid),
-        fetchMedia: async () => (item.imageUrl ? { type: "photo", path: item.imageUrl } : null),
+        // YouTube-фиды: сам ролик как большое видео-превью; остальные — картинка статьи
+        fetchMedia: async () =>
+          feed.url.includes("youtube.com/feeds")
+            ? { type: "video_link", path: item.link }
+            : item.imageUrl
+              ? { type: "photo", path: item.imageUrl }
+              : null,
       });
     }
   }

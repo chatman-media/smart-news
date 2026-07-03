@@ -83,6 +83,17 @@ async function sendPost(
   replyMarkup?: InlineKeyboardMarkup,
 ): Promise<Message> {
   const opts = { parse_mode: "HTML" as const, reply_markup: replyMarkup };
+  // Ссылка на видео (YouTube/FB/TikTok): текст + большое playable-превью над ним
+  if (draft.media_type === "video_link" && draft.media_path) {
+    return await bot.api.sendMessage(chatId, text, {
+      ...opts,
+      link_preview_options: {
+        url: draft.media_path,
+        prefer_large_media: true,
+        show_above_text: true,
+      },
+    });
+  }
   if (draft.media_path && text.length <= CAPTION_LIMIT) {
     const input = draft.media_path.startsWith("http")
       ? draft.media_path
@@ -164,7 +175,16 @@ export async function refreshChannelPost(draftId: number): Promise<void> {
   if (!draft || draft.status !== "published" || !draft.channel_msg_id) return;
   const text = renderPost(draft);
   try {
-    if (draft.media_type) {
+    if (draft.media_type === "video_link" && draft.media_path) {
+      await bot.api.editMessageText(config.channelId, draft.channel_msg_id, text, {
+        parse_mode: "HTML",
+        link_preview_options: {
+          url: draft.media_path,
+          prefer_large_media: true,
+          show_above_text: true,
+        },
+      });
+    } else if (draft.media_type) {
       await bot.api.editMessageCaption(config.channelId, draft.channel_msg_id, {
         parse_mode: "HTML",
         caption: text,
@@ -187,7 +207,16 @@ export async function refreshDraftPreview(draftId: number): Promise<void> {
   const text = renderDraftPreview(draft);
   const opts = { parse_mode: "HTML" as const, reply_markup: draftKeyboard(draft.id) };
   try {
-    if (draft.media_path) {
+    if (draft.media_type === "video_link" && draft.media_path) {
+      await bot.api.editMessageText(adminChatId(), draft.admin_msg_id, text, {
+        ...opts,
+        link_preview_options: {
+          url: draft.media_path,
+          prefer_large_media: true,
+          show_above_text: true,
+        },
+      });
+    } else if (draft.media_path) {
       await bot.api.editMessageCaption(adminChatId(), draft.admin_msg_id, {
         ...opts,
         caption: text,

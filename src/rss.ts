@@ -124,6 +124,51 @@ export async function fetchFeedItems(feed: Feed, limit: number): Promise<FeedIte
   return result;
 }
 
+/** Приводит embed-ссылку к обычному URL видео (для превью в Telegram). */
+function normalizeVideoUrl(raw: string): string | null {
+  const url = raw.startsWith("//") ? `https:${raw}` : raw;
+  if (!url.startsWith("http")) return null;
+  const yt = url.match(/youtube(?:-nocookie)?\.com\/embed\/([\w-]{11})/i);
+  if (yt) return `https://www.youtube.com/watch?v=${yt[1]}`;
+  if (/youtube\.com\/watch|youtu\.be\//i.test(url)) return url;
+  const fb = url.match(/facebook\.com\/plugins\/video\.php\?[^"']*href=([^&"']+)/i);
+  if (fb?.[1]) return decodeURIComponent(fb[1]);
+  if (/facebook\.com\/(reel|watch|[^/]+\/videos)\//i.test(url)) return url;
+  const vimeo = url.match(/player\.vimeo\.com\/video\/(\d+)/i);
+  if (vimeo) return `https://vimeo.com/${vimeo[1]}`;
+  if (/tiktok\.com\//i.test(url)) return url;
+  if (/\.mp4(\?|$)/i.test(url)) return url;
+  return null;
+}
+
+/** Ищет встроенное видео на странице статьи: og:video и iframe-плееры (в т.ч. lazy data-src). */
+export async function extractArticleVideo(articleUrl: string): Promise<string | null> {
+  const response = await fetch(articleUrl, {
+    headers: { "user-agent": USER_AGENT, accept: "text/html" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) return null;
+  const html = (await response.text()).slice(0, 800_000);
+
+  const og =
+    html.match(/property=["']og:video(?::(?:secure_)?url)?["'][^>]*content=["']([^"']+)["']/i) ??
+    html.match(/content=["']([^"']+)["'][^>]*property=["']og:video/i);
+  if (og?.[1]) {
+    const normalized = normalizeVideoUrl(og[1]);
+    if (normalized) return normalized;
+  }
+
+  for (const tag of html.match(/<iframe[^>]+>/gi) ?? []) {
+    for (const attr of tag.matchAll(/(?:data-src|data-lazy-src|src)=["']([^"']+)["']/gi)) {
+      const candidate = attr[1];
+      if (!candidate || candidate === "about:blank") continue;
+      const normalized = normalizeVideoUrl(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
 /** Стабильный 53-битный id из guid — для UNIQUE(source, source_msg_id) в drafts. */
 export function guidToId(guid: string): number {
   return Number(BigInt(Bun.hash(guid)) & 0x1f_ffff_ffff_ffffn);
