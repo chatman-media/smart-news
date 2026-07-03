@@ -28,7 +28,8 @@ const SCOUT_PROMPT = `Найди через веб-поиск действующ
 async function findCandidates(): Promise<RawCandidate[]> {
   const response = await llm.chat.completions.create({
     model: `${config.llmModel}:online`,
-    max_tokens: 2000,
+    // с большим запасом: reasoning + результаты веб-поиска едят лимит до ответа
+    max_tokens: 8000,
     messages: [{ role: "user", content: SCOUT_PROMPT }],
   });
   const parsed = parseJsonLoose<{ candidates: RawCandidate[] }>(contentOf(response));
@@ -60,7 +61,14 @@ export async function runScout(tg: TelegramClient): Promise<number> {
   let sent = 0;
   for (const raw of found) {
     if (raw.kind !== "channel" && raw.kind !== "rss") continue;
-    const ref = raw.kind === "channel" ? raw.ref.replace(/^@/, "").trim() : raw.ref.trim();
+    const ref =
+      raw.kind === "channel"
+        ? raw.ref
+            .trim()
+            .replace(/^https?:\/\/t\.me\/(s\/)?/i, "")
+            .replace(/^@/, "")
+            .replace(/\/.*$/, "")
+        : raw.ref.trim();
     if (!ref || known.has(ref.toLowerCase()) || known.has(ref)) continue;
     if (!(await isAlive(tg, { ...raw, ref }))) {
       console.log(`[scout] кандидат ${ref} не отвечает — пропускаю`);

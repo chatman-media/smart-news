@@ -43,7 +43,8 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
   // Суффикс :online включает веб-поиск на стороне OpenRouter
   const response = await llm.chat.completions.create({
     model: `${config.llmModel}:online`,
-    max_tokens: 4096,
+    // с большим запасом: reasoning + результаты веб-поиска едят лимит до ответа
+    max_tokens: 8000,
     messages: [
       { role: "system", content: RUBRIC_SYSTEM },
       { role: "user", content: RUBRIC_PROMPTS[kind](topic) },

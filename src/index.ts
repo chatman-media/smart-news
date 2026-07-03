@@ -22,18 +22,20 @@ void bot.start({
   onStart: (me) => console.log(`Бот: @${me.username} запущен`),
 });
 
+// Шаги независимы: падение одного не отменяет остальные
 async function tick(): Promise<void> {
-  await runPipeline(tg);
-  const rubric = await maybeGenerateDailyRubric();
-  if (rubric) await sendDraftToAdmin(rubric);
-  await maybeRunWeeklyScout(tg);
+  await runPipeline(tg).catch((err) => console.error("Пайплайн упал:", err));
+  await maybeGenerateDailyRubric()
+    .then((rubric) => (rubric ? sendDraftToAdmin(rubric) : undefined))
+    .catch((err) => console.error("Рубрика упала:", err));
+  await maybeRunWeeklyScout(tg).catch((err) => console.error("Скаут упал:", err));
 }
 
-await tick().catch((err) => console.error("Первый прогон упал:", err));
+await tick();
 
 setInterval(
   () => {
-    tick().catch((err) => console.error("Прогон упал:", err));
+    void tick();
   },
   config.pollIntervalMin * 60 * 1000,
 );
