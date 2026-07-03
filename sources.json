@@ -27,6 +27,11 @@
       "name": "khaosod-th",
       "url": "https://www.khaosod.co.th/feed",
       "note": "Khaosod, тайскоязычный первоисточник (TH)"
+    },
+    {
+      "name": "youtube-thaiger",
+      "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfyWB_cTvCBWau8mFcMnJkQ",
+      "note": "The Thaiger на YouTube (EN, видео-новости; Atom-фид)"
     }
   ]
 }

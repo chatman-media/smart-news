@@ -4,6 +4,7 @@ import { classify, confirmStory, triage, type Verdict } from "./classify";
 import { config } from "./config";
 import {
   addDraftSource,
+  bumpStat,
   getLastMsgId,
   insertDraft,
   isRssSeen,
@@ -26,7 +27,9 @@ export async function runPipeline(tg: TelegramClient): Promise<number> {
   try {
     const posts = [...(await gatherTelegram(tg)), ...(await gatherRss())];
     if (posts.length === 0) return 0;
+    bumpStat("gathered", posts.length);
     const candidates = await triagePosts(posts);
+    bumpStat("triage_out", posts.length - candidates.length);
     let newDrafts = 0;
     for (const post of candidates) {
       if (await processCandidate(post)) newDrafts++;
@@ -102,8 +105,10 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   ) {
     verdict.keep = false;
     verdict.reason = "negative_quota";
+    bumpStat("quota_drop");
   }
   if (!verdict.keep) {
+    if (verdict.reason !== "negative_quota") bumpStat("classify_drop");
     console.log(`[${post.label}] отфильтровано: ${verdict.reason}`);
     return false;
   }
@@ -118,6 +123,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
       await refreshDraftPreview(storyId); // если сюжет ещё на модерации
       await refreshChannelPost(storyId); // если уже опубликован
       console.log(`[${post.label}] влит в сюжет #${storyId}`);
+      bumpStat("merged");
       return false;
     }
   } catch (err) {
@@ -145,6 +151,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   });
   if (!draft) return false;
   if (vector) setDraftEmbedding(draft.id, vector);
+  bumpStat("drafted");
   await deliverDraft(draft);
   return true;
 }

@@ -1,5 +1,6 @@
 import { bot, deliverDraft, registerAdminCommands, validateChannel } from "./bot";
 import { config } from "./config";
+import { maybeCollectDailyEngagement } from "./engagement";
 import { runPipeline } from "./pipeline";
 import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubric } from "./rubrics";
 import { maybeRunWeeklyScout, runScout } from "./scout";
@@ -29,6 +30,9 @@ async function tick(): Promise<void> {
     .then((rubric) => (rubric ? deliverDraft(rubric) : undefined))
     .catch((err) => console.error("Рубрика упала:", err));
   await maybeRunWeeklyScout(tg).catch((err) => console.error("Скаут упал:", err));
+  await maybeCollectDailyEngagement(tg).catch((err) =>
+    console.error("Сбор вовлечённости упал:", err),
+  );
 }
 
 await tick();

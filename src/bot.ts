@@ -3,15 +3,19 @@ import { Bot, InlineKeyboard, InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { adminChatId, config } from "./config";
 import {
+  bumpStat,
   type Draft,
+  engagementByCategory,
   getDraft,
   getScoutCandidate,
   listDraftSources,
+  publishedByCategory,
   type ScoutCandidate,
   setAdminMsgId,
   setChannelMsgId,
   setDraftStatus,
   setScoutStatus,
+  statsRange,
 } from "./db";
 import { addSource } from "./sources";
 
@@ -127,6 +131,7 @@ export async function publishDraft(draft: Draft): Promise<void> {
   const msg = await sendPost(config.channelId, draft, renderPost(draft));
   setChannelMsgId(draft.id, msg.message_id);
   setDraftStatus(draft.id, "published");
+  bumpStat("published");
   await cleanupMedia(draft);
 }
 
@@ -275,10 +280,56 @@ bot.callbackQuery(/^del:(\d+)$/, async (ctx) => {
     return;
   }
   setDraftStatus(draft.id, "retracted");
+  bumpStat("retracted");
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await ctx.answerCallbackQuery({ text: "Убрано из канала" });
   await ctx.reply(`🗑 Пост #${draft.id} убран из канала`);
 });
+
+function renderStats(): string {
+  const fmt = (s: Record<string, number>): string =>
+    [
+      `собрано ${s.gathered ?? 0}`,
+      `триаж-отсев ${s.triage_out ?? 0}`,
+      `фильтр-отсев ${s.classify_drop ?? 0}`,
+      `квота негатива ${s.quota_drop ?? 0}`,
+      `в сюжеты ${s.merged ?? 0}`,
+      `черновиков ${s.drafted ?? 0}`,
+      `опубликовано ${s.published ?? 0}`,
+      ...(s.retracted ? [`убрано ${s.retracted}`] : []),
+    ].join(" · ");
+
+  const lines = [
+    "📊 <b>Статистика</b>",
+    "",
+    `<b>Сегодня:</b> ${fmt(statsRange(1))}`,
+    `<b>7 дней:</b> ${fmt(statsRange(7))}`,
+  ];
+
+  const cats = publishedByCategory(7);
+  if (cats.length > 0) {
+    lines.push(
+      "",
+      `<b>Опубликовано по категориям (7 дн):</b> ${cats.map((c) => `${c.category} ${c.n}`).join(" · ")}`,
+    );
+  }
+
+  const engagement = engagementByCategory(14)
+    .filter((e) => e.views > 0)
+    .map((e) => ({ ...e, rate: (e.reactions + e.forwards) / e.views }))
+    .sort((a, b) => b.rate - a.rate);
+  if (engagement.length > 0) {
+    const total = engagement.reduce((s, e) => s + e.views, 0);
+    lines.push(
+      "",
+      `<b>Вовлечённость (14 дн, ${total} 👀):</b> ${engagement
+        .map((e) => `${e.category} ${(e.rate * 100).toFixed(1)}%`)
+        .join(" · ")}`,
+    );
+  }
+
+  return lines.join("\n");
+}
 
 bot.callbackQuery(/^(scoutadd|scoutno):(\d+)$/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) {
@@ -347,6 +398,11 @@ export function registerAdminCommands(
   makeRubric: (kind: "place" | "activity") => Promise<Draft | null>,
   scoutNow: () => Promise<number>,
 ): void {
+  bot.command("stats", async (ctx) => {
+    if (!isAdmin(ctx.from?.id)) return;
+    await ctx.reply(renderStats(), { parse_mode: "HTML" });
+  });
+
   bot.command("scout", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.reply("Ищу новые источники (займёт минуту)…");
@@ -388,7 +444,7 @@ export function registerAdminCommands(
   bot.command("start", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     await ctx.reply(
-      "Я собираю новости из источников, фильтрую через LLM, склеиваю дубли в сюжеты и присылаю сюда черновики с кнопками. /check — проверить источники сейчас, /rubric [place|activity] — сгенерировать рубрику, /scout — поискать новые источники.",
+      "Я собираю новости из источников, фильтрую через LLM, склеиваю дубли в сюжеты и публикую (или присылаю на модерацию). /check — проверить источники, /rubric [place|activity] — рубрика, /scout — поиск новых источников, /stats — статистика.",
     );
   });
 }

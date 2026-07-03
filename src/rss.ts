@@ -53,9 +53,21 @@ function imageOf(item: Record<string, unknown>, html: string): string | null {
   return img?.[1] ?? null;
 }
 
+/** Atom-ссылка: <link href="..."/> (может быть массивом). */
+function hrefOf(node: unknown): string {
+  for (const n of Array.isArray(node) ? node : [node]) {
+    const href = (n as Record<string, unknown> | null)?.["@_href"];
+    if (typeof href === "string") return href;
+  }
+  return "";
+}
+
 export async function fetchFeedItems(feed: Feed, limit: number): Promise<FeedItem[]> {
   const response = await fetch(feed.url, {
-    headers: { "user-agent": USER_AGENT, accept: "application/rss+xml, application/xml, text/xml" },
+    headers: {
+      "user-agent": USER_AGENT,
+      accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+    },
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) {
@@ -64,26 +76,51 @@ export async function fetchFeedItems(feed: Feed, limit: number): Promise<FeedIte
   const xml = await response.text();
   const doc = parser.parse(xml);
 
-  const rawItems = doc?.rss?.channel?.item;
-  const items: unknown[] = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
-
   const result: FeedItem[] = [];
-  for (const raw of items.slice(0, limit)) {
-    const item = raw as Record<string, unknown>;
-    const title = stripHtml(textOf(item.title));
-    const link = textOf(item.link).trim();
-    const guid = textOf(item.guid).trim() || link;
-    const rawHtml = textOf(item["content:encoded"]) || textOf(item.description);
-    const body = stripHtml(rawHtml);
-    if (!guid || !title) continue;
-    result.push({
-      guid,
-      title,
-      link,
-      text: `${title}\n\n${body}`,
-      imageUrl: imageOf(item, rawHtml),
-    });
+
+  const rawRss = doc?.rss?.channel?.item;
+  const rawAtom = doc?.feed?.entry;
+  if (rawRss) {
+    const items: unknown[] = Array.isArray(rawRss) ? rawRss : [rawRss];
+    for (const raw of items.slice(0, limit)) {
+      const item = raw as Record<string, unknown>;
+      const title = stripHtml(textOf(item.title));
+      const link = textOf(item.link).trim();
+      const guid = textOf(item.guid).trim() || link;
+      const rawHtml = textOf(item["content:encoded"]) || textOf(item.description);
+      const body = stripHtml(rawHtml);
+      if (!guid || !title) continue;
+      result.push({
+        guid,
+        title,
+        link,
+        text: `${title}\n\n${body}`,
+        imageUrl: imageOf(item, rawHtml),
+      });
+    }
+  } else if (rawAtom) {
+    // Atom (в т.ч. YouTube: https://www.youtube.com/feeds/videos.xml?channel_id=...)
+    const entries: unknown[] = Array.isArray(rawAtom) ? rawAtom : [rawAtom];
+    for (const raw of entries.slice(0, limit)) {
+      const entry = raw as Record<string, unknown>;
+      const media = entry["media:group"] as Record<string, unknown> | undefined;
+      const title = stripHtml(textOf(entry.title));
+      const link = hrefOf(entry.link);
+      const guid = textOf(entry.id).trim() || link;
+      const body = stripHtml(
+        textOf(media?.["media:description"]) || textOf(entry.summary) || textOf(entry.content),
+      );
+      if (!guid || !title) continue;
+      result.push({
+        guid,
+        title,
+        link,
+        text: `${title}\n\n${body}`.slice(0, 4000),
+        imageUrl: imageOf({ "media:content": media?.["media:thumbnail"] }, ""),
+      });
+    }
   }
+
   return result;
 }
 

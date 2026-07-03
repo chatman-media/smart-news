@@ -66,6 +66,13 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS stats_daily (
+    day TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, metric)
+  );
 `);
 
 // Мягкая миграция для баз, созданных до появления колонки
@@ -79,6 +86,9 @@ ensureColumn("drafts", "media_type", "media_type TEXT");
 ensureColumn("drafts", "media_path", "media_path TEXT");
 ensureColumn("drafts", "embedding", "embedding BLOB");
 ensureColumn("drafts", "channel_msg_id", "channel_msg_id INTEGER");
+ensureColumn("drafts", "views", "views INTEGER");
+ensureColumn("drafts", "forwards", "forwards INTEGER");
+ensureColumn("drafts", "reactions", "reactions INTEGER");
 
 export interface Draft {
   id: number;
@@ -328,4 +338,72 @@ export function getScoutCandidate(id: number): ScoutCandidate | null {
 
 export function setScoutStatus(id: number, status: string): void {
   db.run("UPDATE scout_candidates SET status = ? WHERE id = ?", [status, id]);
+}
+
+export function bumpStat(metric: string, by = 1): void {
+  if (by <= 0) return;
+  db.run(
+    `INSERT INTO stats_daily (day, metric, value) VALUES (date('now'), ?, ?)
+     ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`,
+    [metric, by],
+  );
+}
+
+/** Суммы метрик за последние N дней (включая сегодня). */
+export function statsRange(days: number): Record<string, number> {
+  const rows = db
+    .query<{ metric: string; total: number }, [string]>(
+      `SELECT metric, SUM(value) AS total FROM stats_daily
+       WHERE day >= date('now', ?) GROUP BY metric`,
+    )
+    .all(`-${days - 1} days`);
+  return Object.fromEntries(rows.map((r) => [r.metric, r.total]));
+}
+
+export function publishedByCategory(days: number): { category: string; n: number }[] {
+  return db
+    .query<{ category: string; n: number }, [string]>(
+      `SELECT category, COUNT(*) AS n FROM drafts
+       WHERE status = 'published' AND created_at >= datetime('now', ?)
+       GROUP BY category ORDER BY n DESC`,
+    )
+    .all(`-${days} days`);
+}
+
+/** Опубликованные посты для сбора вовлечённости. */
+export function publishedForEngagement(days: number): { id: number; channel_msg_id: number }[] {
+  return db
+    .query<{ id: number; channel_msg_id: number }, [string]>(
+      `SELECT id, channel_msg_id FROM drafts
+       WHERE status = 'published' AND channel_msg_id IS NOT NULL
+         AND created_at >= datetime('now', ?)`,
+    )
+    .all(`-${days} days`);
+}
+
+export function updateEngagement(
+  id: number,
+  views: number,
+  forwards: number,
+  reactions: number,
+): void {
+  db.run("UPDATE drafts SET views = ?, forwards = ?, reactions = ? WHERE id = ?", [
+    views,
+    forwards,
+    reactions,
+    id,
+  ]);
+}
+
+export function engagementByCategory(
+  days: number,
+): { category: string; views: number; forwards: number; reactions: number }[] {
+  return db
+    .query<{ category: string; views: number; forwards: number; reactions: number }, [string]>(
+      `SELECT category, SUM(views) AS views, SUM(forwards) AS forwards, SUM(reactions) AS reactions
+       FROM drafts
+       WHERE status = 'published' AND views IS NOT NULL AND created_at >= datetime('now', ?)
+       GROUP BY category`,
+    )
+    .all(`-${days} days`);
 }
