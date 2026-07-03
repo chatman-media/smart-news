@@ -1,4 +1,4 @@
-import { bot, registerAdminCommands, sendDraftToAdmin, validateChannel } from "./bot";
+import { bot, deliverDraft, registerAdminCommands, validateChannel } from "./bot";
 import { config } from "./config";
 import { runPipeline } from "./pipeline";
 import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubric } from "./rubrics";
@@ -26,7 +26,7 @@ void bot.start({
 async function tick(): Promise<void> {
   await runPipeline(tg).catch((err) => console.error("Пайплайн упал:", err));
   await maybeGenerateDailyRubric()
-    .then((rubric) => (rubric ? sendDraftToAdmin(rubric) : undefined))
+    .then((rubric) => (rubric ? deliverDraft(rubric) : undefined))
     .catch((err) => console.error("Рубрика упала:", err));
   await maybeRunWeeklyScout(tg).catch((err) => console.error("Скаут упал:", err));
 }

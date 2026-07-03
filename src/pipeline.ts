@@ -1,5 +1,5 @@
 import type { Message, TelegramClient } from "@mtcute/bun";
-import { refreshDraftPreview, sendDraftToAdmin } from "./bot";
+import { deliverDraft, refreshChannelPost, refreshDraftPreview } from "./bot";
 import { classify, confirmStory, triage, type Verdict } from "./classify";
 import { config } from "./config";
 import {
@@ -115,7 +115,8 @@ async function processCandidate(post: NewPost): Promise<boolean> {
     const storyId = await matchStory(verdict, vector);
     if (storyId) {
       addDraftSource(storyId, post.source, post.link);
-      await refreshDraftPreview(storyId);
+      await refreshDraftPreview(storyId); // если сюжет ещё на модерации
+      await refreshChannelPost(storyId); // если уже опубликован
       console.log(`[${post.label}] влит в сюжет #${storyId}`);
       return false;
     }
@@ -144,7 +145,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   });
   if (!draft) return false;
   if (vector) setDraftEmbedding(draft.id, vector);
-  await sendDraftToAdmin(draft);
+  await deliverDraft(draft);
   return true;
 }
 

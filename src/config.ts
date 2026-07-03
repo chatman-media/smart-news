@@ -18,6 +18,8 @@ export const config = {
     | null,
   channelId: parseChatId(required("CHANNEL_ID")),
   openrouterApiKey: required("OPENROUTER_API_KEY"),
+  // Автопубликация без модерации; в личку приходит уведомление с кнопкой «убрать»
+  autoPublish: process.env.AUTO_PUBLISH === "1",
   llmModel: process.env.LLM_MODEL || "anthropic/claude-opus-4.8",
   pollIntervalMin: Number(process.env.POLL_INTERVAL_MIN || "10"),
   // Максимальная доля негатива в фиде, % (важность 5 — предупреждения о безопасности — проходят всегда)

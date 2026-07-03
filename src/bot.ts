@@ -9,6 +9,7 @@ import {
   listDraftSources,
   type ScoutCandidate,
   setAdminMsgId,
+  setChannelMsgId,
   setDraftStatus,
   setScoutStatus,
 } from "./db";
@@ -121,6 +122,59 @@ export async function sendDraftToAdmin(draft: Draft): Promise<void> {
   setAdminMsgId(draft.id, msg.message_id);
 }
 
+/** Публикация в канал: запоминаем message_id, чистим локальное медиа. */
+export async function publishDraft(draft: Draft): Promise<void> {
+  const msg = await sendPost(config.channelId, draft, renderPost(draft));
+  setChannelMsgId(draft.id, msg.message_id);
+  setDraftStatus(draft.id, "published");
+  await cleanupMedia(draft);
+}
+
+async function notifyAutoPublished(draft: Draft): Promise<void> {
+  const keyboard = new InlineKeyboard().text("🗑 Убрать из канала", `del:${draft.id}`);
+  await bot.api.sendMessage(
+    adminChatId(),
+    `🚀 <b>Опубликовано автоматически</b> · #${draft.id} · ${draft.category} · ${draft.tone}\n\n${renderPost(draft)}`,
+    { parse_mode: "HTML", reply_markup: keyboard, link_preview_options: { is_disabled: true } },
+  );
+}
+
+/** Единая точка доставки черновика: автопубликация или модерация. */
+export async function deliverDraft(draft: Draft): Promise<void> {
+  if (config.autoPublish) {
+    try {
+      await publishDraft(draft);
+      await notifyAutoPublished(draft);
+      return;
+    } catch (err) {
+      console.error(`Черновик #${draft.id}: автопубликация не удалась, шлю на модерацию:`, err);
+    }
+  }
+  await sendDraftToAdmin(draft);
+}
+
+/** Обновляет уже опубликованный пост в канале (например, добавился источник сюжета). */
+export async function refreshChannelPost(draftId: number): Promise<void> {
+  const draft = getDraft(draftId);
+  if (!draft || draft.status !== "published" || !draft.channel_msg_id) return;
+  const text = renderPost(draft);
+  try {
+    if (draft.media_type) {
+      await bot.api.editMessageCaption(config.channelId, draft.channel_msg_id, {
+        parse_mode: "HTML",
+        caption: text,
+      });
+    } else {
+      await bot.api.editMessageText(config.channelId, draft.channel_msg_id, text, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+    }
+  } catch (err) {
+    console.error(`Черновик #${draftId}: не удалось обновить пост в канале:`, err);
+  }
+}
+
 /** Обновляет превью черновика в личке (например, когда к сюжету добавился источник). */
 export async function refreshDraftPreview(draftId: number): Promise<void> {
   const draft = getDraft(draftId);
@@ -179,7 +233,7 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
 
   if (action === "pub") {
     try {
-      await sendPost(config.channelId, draft, renderPost(draft));
+      await publishDraft(draft);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await ctx.answerCallbackQuery({ text: "Не смог опубликовать", show_alert: true });
@@ -188,8 +242,6 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
       );
       return;
     }
-    setDraftStatus(draft.id, "published");
-    await cleanupMedia(draft);
     // editMessageText не работает для медиа-сообщений — просто снимаем кнопки
     await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
     await ctx.answerCallbackQuery({ text: "Опубликовано ✅" });
@@ -201,6 +253,31 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Пропущено" });
     await ctx.reply(`❌ Черновик #${draft.id} пропущен`);
   }
+});
+
+bot.callbackQuery(/^del:(\d+)$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) {
+    await ctx.answerCallbackQuery({ text: "Не твоя кнопка" });
+    return;
+  }
+  const draft = getDraft(Number(ctx.match[1]));
+  if (!draft?.channel_msg_id) {
+    await ctx.answerCallbackQuery({ text: "Пост не найден" });
+    return;
+  }
+  try {
+    await bot.api.deleteMessage(config.channelId, draft.channel_msg_id);
+  } catch (err) {
+    // боты не могут удалять посты старше 48 часов
+    const reason = err instanceof Error ? err.message : String(err);
+    await ctx.answerCallbackQuery({ text: "Не смог удалить", show_alert: true });
+    await ctx.reply(`Удаление не удалось: ${reason}`);
+    return;
+  }
+  setDraftStatus(draft.id, "retracted");
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "Убрано из канала" });
+  await ctx.reply(`🗑 Пост #${draft.id} убран из канала`);
 });
 
 bot.callbackQuery(/^(scoutadd|scoutno):(\d+)$/, async (ctx) => {
@@ -288,7 +365,7 @@ export function registerAdminCommands(
     try {
       const draft = await makeRubric(kind);
       if (draft) {
-        await sendDraftToAdmin(draft);
+        await deliverDraft(draft);
       } else {
         await ctx.reply("Не получилось: нет свободной темы");
       }

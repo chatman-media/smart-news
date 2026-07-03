@@ -78,6 +78,7 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 ensureColumn("drafts", "media_type", "media_type TEXT");
 ensureColumn("drafts", "media_path", "media_path TEXT");
 ensureColumn("drafts", "embedding", "embedding BLOB");
+ensureColumn("drafts", "channel_msg_id", "channel_msg_id INTEGER");
 
 export interface Draft {
   id: number;
@@ -93,6 +94,7 @@ export interface Draft {
   media_path: string | null;
   status: string;
   admin_msg_id: number | null;
+  channel_msg_id: number | null;
   created_at: string;
 }
 
@@ -114,7 +116,7 @@ export function setLastMsgId(username: string, msgId: number): void {
 }
 
 export function insertDraft(
-  d: Omit<Draft, "id" | "status" | "admin_msg_id" | "created_at">,
+  d: Omit<Draft, "id" | "status" | "admin_msg_id" | "channel_msg_id" | "created_at">,
 ): Draft | null {
   const row = db
     .query<
@@ -151,6 +153,10 @@ export function setDraftStatus(id: number, status: string): void {
 
 export function setAdminMsgId(id: number, adminMsgId: number): void {
   db.run("UPDATE drafts SET admin_msg_id = ? WHERE id = ?", [adminMsgId, id]);
+}
+
+export function setChannelMsgId(id: number, channelMsgId: number): void {
+  db.run("UPDATE drafts SET channel_msg_id = ? WHERE id = ?", [channelMsgId, id]);
 }
 
 export function isRssSeen(feed: string, guid: string): boolean {
