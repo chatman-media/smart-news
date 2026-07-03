@@ -15,6 +15,7 @@ import {
   setLastMsgId,
 } from "./db";
 import { cosine, embed } from "./llm";
+import { generateIllustration, imageFits } from "./media-ai";
 import { fetchFeedItems, guidToId } from "./rss";
 import { loadFeeds, loadSources } from "./sources";
 
@@ -134,7 +135,31 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   try {
     media = (await post.fetchMedia?.()) ?? null;
   } catch (err) {
-    console.error(`[${post.label}] медиа не скачалось, пост уйдёт текстом:`, err);
+    console.error(`[${post.label}] медиа не скачалось:`, err);
+  }
+  // Картинки из RSS бывают логотипами/заглушками — проверяем vision-моделью
+  // (превью YouTube всегда от самого видео, их не трогаем)
+  if (
+    media?.type === "photo" &&
+    /^https?:/.test(media.path) &&
+    !media.path.includes("ytimg.com") &&
+    !(await imageFits(media.path, verdict.title))
+  ) {
+    console.log(`[${post.label}] картинка источника отклонена vision-фильтром`);
+    media = null;
+  }
+  // Совсем без картинки — генерируем фотоиллюстрацию по смыслу новости
+  if (!media) {
+    try {
+      media = await generateIllustration(
+        verdict.title,
+        verdict.summary,
+        `${post.source}_${post.sourceMsgId}`,
+      );
+      if (media) console.log(`[${post.label}] сгенерирована иллюстрация`);
+    } catch (err) {
+      console.error(`[${post.label}] генерация иллюстрации не удалась, пост уйдёт текстом:`, err);
+    }
   }
 
   const draft = insertDraft({

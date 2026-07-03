@@ -21,6 +21,10 @@ export const config = {
   // Автопубликация без модерации; в личку приходит уведомление с кнопкой «убрать»
   autoPublish: process.env.AUTO_PUBLISH === "1",
   llmModel: process.env.LLM_MODEL || "anthropic/claude-opus-4.8",
+  // Генерация иллюстраций, когда у поста нет пригодной картинки; пустая строка = выключено
+  imageModel: process.env.IMAGE_MODEL ?? "google/gemini-3.1-flash-image",
+  // Vision-модель для проверки «подходит ли картинка из источника к новости»
+  visionModel: process.env.VISION_MODEL || "z-ai/glm-5v-turbo",
   pollIntervalMin: Number(process.env.POLL_INTERVAL_MIN || "10"),
   // Максимальная доля негатива в фиде, % (важность 5 — предупреждения о безопасности — проходят всегда)
   negativeQuotaPct: Number(process.env.NEGATIVE_QUOTA_PCT || "20"),

@@ -10,6 +10,7 @@ import {
   seedRubricTopics,
 } from "./db";
 import { contentOf, llm } from "./llm";
+import { generateIllustration } from "./media-ai";
 import { ACTIVITIES, PLACES } from "./rubric-topics";
 
 export type RubricKind = "place" | "activity";
@@ -60,6 +61,13 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
 
   markRubricTopicUsed(kind, topic);
 
+  const media = await generateIllustration(title, body.slice(0, 300), `rubric_${Date.now()}`).catch(
+    (err) => {
+      console.error(`[rubric] иллюстрация не сгенерировалась, пост уйдёт текстом:`, err);
+      return null;
+    },
+  );
+
   return insertDraft({
     source: "rubric",
     source_msg_id: Date.now(),
@@ -69,8 +77,8 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
     category: kind,
     importance: 3,
     tone: "positive",
-    media_type: null,
-    media_path: null,
+    media_type: media?.type ?? null,
+    media_path: media?.path ?? null,
   });
 }
 
