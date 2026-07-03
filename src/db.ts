@@ -115,22 +115,14 @@ ensureColumn("drafts", "reactions", "reactions INTEGER");
 ensureColumn("drafts", "channel_id", "channel_id INTEGER NOT NULL DEFAULT 1");
 ensureColumn("scout_candidates", "channel_id", "channel_id INTEGER NOT NULL DEFAULT 1");
 
-// Одноразовая миграция single-channel → multi-channel: state получает префикс канала 1
-if (
-  db
-    .query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM channel_state WHERE username NOT LIKE '%:%'",
-    )
-    .get()!.n > 0
-) {
-  db.run("UPDATE channel_state SET username = '1:' || username WHERE username NOT LIKE '%:%'");
-}
-if (
-  db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM rss_seen WHERE feed NOT LIKE '%:%'").get()!
-    .n > 0
-) {
-  db.run("UPDATE OR IGNORE rss_seen SET feed = '1:' || feed WHERE feed NOT LIKE '%:%'");
-}
+// Одноразовая миграция single-channel → multi-channel: state получает префикс канала 1.
+// OR IGNORE + DELETE — идемпотентно, даже если старый процесс успел дописать строки без префикса.
+db.run(
+  "UPDATE OR IGNORE channel_state SET username = '1:' || username WHERE username NOT LIKE '%:%'",
+);
+db.run("DELETE FROM channel_state WHERE username NOT LIKE '%:%'");
+db.run("UPDATE OR IGNORE rss_seen SET feed = '1:' || feed WHERE feed NOT LIKE '%:%'");
+db.run("DELETE FROM rss_seen WHERE feed NOT LIKE '%:%'");
 
 export interface Channel {
   id: number;
