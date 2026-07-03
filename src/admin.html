@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>смарт·ньюс — редакция</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,800;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f5efe3;
+    --paper-2: #efe7d6;
+    --ink: #1e1a14;
+    --ink-soft: #57503f;
+    --rule: #c9bda1;
+    --accent: #c2451e;
+    --accent-soft: #e8dcc2;
+    --ok: #3e6b3a;
+    --serif: "Spectral", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--paper);
+    background-image: radial-gradient(rgba(30,26,20,.045) 1px, transparent 1.2px);
+    background-size: 5px 5px;
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.55;
+    padding: 0 20px 90px;
+  }
+  .sheet { max-width: 1060px; margin: 0 auto; }
+
+  /* Шапка-выходные данные */
+  header {
+    padding: 30px 0 14px;
+    border-bottom: 3px double var(--ink);
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 800; font-size: clamp(34px, 6vw, 56px);
+    letter-spacing: -.01em; line-height: .95;
+  }
+  h1 .dot { color: var(--accent); }
+  .imprint { text-align: right; color: var(--ink-soft); font-size: 11.5px; text-transform: uppercase; letter-spacing: .14em; }
+  .imprint b { color: var(--ink); }
+
+  main { display: grid; gap: 26px; margin-top: 26px; }
+
+  /* Карточка канала — «полоса выпуска» */
+  .channel {
+    border: 1.5px solid var(--ink);
+    background: var(--paper);
+    box-shadow: 5px 5px 0 rgba(30,26,20,.16);
+  }
+  .channel.inactive { opacity: .62; }
+  .ch-head {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 18px; border-bottom: 1px solid var(--rule);
+  }
+  .ch-title {
+    font-family: var(--serif); font-weight: 600; font-size: 25px; flex: 1; min-width: 200px;
+    background: none; border: none; color: var(--ink); padding: 0;
+  }
+  .ch-title:focus { outline: none; border-bottom: 2px solid var(--accent); }
+  .stamp {
+    font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+    border: 1.5px solid currentColor; padding: 3px 9px; transform: rotate(-2deg);
+    color: var(--ok); user-select: none;
+  }
+  .stamp.off { color: var(--accent); }
+  .chat-id { color: var(--ink-soft); }
+
+  .ch-body { display: grid; grid-template-columns: 1.1fr .9fr; }
+  @media (max-width: 800px) { .ch-body { grid-template-columns: 1fr; } }
+
+  .col { padding: 16px 18px; }
+  .col + .col { border-left: 1px solid var(--rule); }
+  @media (max-width: 800px) { .col + .col { border-left: none; border-top: 1px solid var(--rule); } }
+
+  .label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-soft); margin: 14px 0 5px;
+  }
+  .label:first-child { margin-top: 0; }
+
+  textarea, input[type=text], input[type=number] {
+    width: 100%; font-family: var(--mono); font-size: 13px; color: var(--ink);
+    background: var(--paper-2); border: 1px solid var(--rule); padding: 7px 9px;
+  }
+  textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { resize: vertical; min-height: 58px; }
+
+  .settings-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .num { width: 74px !important; text-align: center; }
+
+  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+  .toggle input { position: absolute; opacity: 0; }
+  .toggle .box {
+    width: 17px; height: 17px; border: 1.5px solid var(--ink); display: inline-flex;
+    align-items: center; justify-content: center; font-weight: 600; font-size: 13px;
+    background: var(--paper-2); color: var(--accent);
+  }
+  .toggle .box::after { content: ""; }
+  .toggle input:checked + .box::after { content: "×"; }
+
+  /* Источники */
+  .src { display: flex; align-items: baseline; gap: 9px; padding: 6px 0; border-bottom: 1px dotted var(--rule); }
+  .src:last-of-type { border-bottom: none; }
+  .src.off .ref { text-decoration: line-through; color: var(--ink-soft); }
+  .kind {
+    font-size: 9.5px; letter-spacing: .12em; padding: 2px 6px; flex: none;
+    border: 1px solid var(--ink); text-transform: uppercase;
+  }
+  .kind.rss { background: var(--accent-soft); }
+  .ref { flex: 1; word-break: break-all; }
+  .src small { color: var(--ink-soft); display: block; font-size: 11px; }
+  .src button { flex: none; }
+
+  button {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
+    background: none; border: 1.5px solid var(--ink); color: var(--ink);
+    padding: 5px 12px; cursor: pointer; transition: all .12s;
+  }
+  button:hover { background: var(--ink); color: var(--paper); }
+  button.primary { background: var(--ink); color: var(--paper); }
+  button.primary:hover { background: var(--accent); border-color: var(--accent); }
+  button.ghost { border-color: var(--rule); color: var(--ink-soft); padding: 3px 8px; }
+  button.ghost:hover { border-color: var(--accent); color: var(--accent); background: none; }
+
+  .addform { display: grid; grid-template-columns: 92px 1fr auto; gap: 7px; margin-top: 12px; }
+  .addform select {
+    font-family: var(--mono); font-size: 12px; background: var(--paper-2);
+    border: 1px solid var(--rule); color: var(--ink); padding: 6px;
+  }
+  .ch-foot { padding: 12px 18px; border-top: 1px solid var(--rule); display: flex; gap: 10px; align-items: center; }
+  .saved { color: var(--ok); font-size: 11.5px; opacity: 0; transition: opacity .2s; }
+  .saved.show { opacity: 1; }
+
+  /* Новый канал */
+  .new-channel {
+    border: 1.5px dashed var(--ink-soft); padding: 20px 18px; background: transparent;
+  }
+  .new-channel h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin-bottom: 12px; }
+  .new-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 700px) { .new-grid { grid-template-columns: 1fr; } }
+  .new-grid .wide { grid-column: 1 / -1; }
+
+  .error-bar {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: var(--accent); color: var(--paper); padding: 9px 18px; font-size: 12.5px;
+    box-shadow: 4px 4px 0 rgba(30,26,20,.3); display: none; max-width: 90vw;
+  }
+  footer { margin-top: 40px; padding-top: 12px; border-top: 3px double var(--ink); color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: .14em; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <h1>смарт<span class="dot">·</span>ньюс</h1>
+    <div class="imprint">
+      редакционный пульт<br>
+      каналы · источники · настройки<br>
+      <b id="today"></b>
+    </div>
+  </header>
+
+  <main id="channels"></main>
+
+  <section class="new-channel" style="margin-top:26px">
+    <h2>+ Новый канал</h2>
+    <div class="new-grid">
+      <div>
+        <div class="label">Название</div>
+        <input type="text" id="nc-name" placeholder="Паттайя">
+      </div>
+      <div>
+        <div class="label">chat_id (@юзернейм канала, бот — админ)</div>
+        <input type="text" id="nc-chat" placeholder="@pattaya_feed">
+      </div>
+      <div class="wide">
+        <div class="label">Аудитория / фокус (уходит в промпты фильтра)</div>
+        <textarea id="nc-focus" placeholder="русскоязычные экспаты в Паттайе"></textarea>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="primary" onclick="createChannel()">Создать канал</button>
+    </div>
+  </section>
+
+  <footer>
+    <span>smart-news · локальная админка</span>
+    <span>источники подхватываются следующим циклом пайплайна</span>
+  </footer>
+</div>
+<div class="error-bar" id="errbar"></div>
+
+<script>
+const $ = (sel, root = document) => root.querySelector(sel);
+document.getElementById("today").textContent = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+function showError(message) {
+  const bar = $("#errbar");
+  bar.textContent = message;
+  bar.style.display = "block";
+  setTimeout(() => { bar.style.display = "none"; }, 5000);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "content-type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || res.status + " " + res.statusText);
+  }
+  return res.json();
+}
+
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+function sourceRow(src) {
+  return `
+    <div class="src ${src.active ? "" : "off"}">
+      <span class="kind ${src.kind === "rss" ? "rss" : ""}">${src.kind === "rss" ? "RSS" : "TG"}</span>
+      <span class="ref">${esc(src.ref)}${src.note ? `<small>${esc(src.note)}</small>` : ""}</span>
+      <button class="ghost" onclick="toggleSource(${src.id}, ${src.active ? 0 : 1})">${src.active ? "пауза" : "вкл"}</button>
+      <button class="ghost" onclick="removeSource(${src.id}, '${esc(src.ref)}')">×</button>
+    </div>`;
+}
+
+function channelCard(ch) {
+  return `
+  <article class="channel ${ch.active ? "" : "inactive"}" data-id="${ch.id}">
+    <div class="ch-head">
+      <input class="ch-title" data-f="name" value="${esc(ch.name)}">
+      <span class="chat-id">${esc(ch.chat_id)}</span>
+      <span class="stamp ${ch.active ? "" : "off"}">${ch.active ? "в эфире" : "пауза"}</span>
+    </div>
+    <div class="ch-body">
+      <div class="col">
+        <div class="label">Аудитория / фокус</div>
+        <textarea data-f="focus">${esc(ch.focus)}</textarea>
+        <div class="label">chat_id канала</div>
+        <input type="text" data-f="chat_id" value="${esc(ch.chat_id)}">
+        <div class="label">Настройки</div>
+        <div class="settings-row">
+          <span>негатив ≤ <input type="number" class="num" data-f="negative_quota" value="${ch.negative_quota}" min="0" max="100">%</span>
+          <span>рубрика после <input type="number" class="num" data-f="rubric_hour" value="${ch.rubric_hour}" min="0" max="23">:00</span>
+        </div>
+        <div class="settings-row" style="margin-top:10px">
+          <label class="toggle"><input type="checkbox" data-f="auto_publish" ${ch.auto_publish ? "checked" : ""}><span class="box"></span>автопубликация</label>
+          <label class="toggle"><input type="checkbox" data-f="rubrics_enabled" ${ch.rubrics_enabled ? "checked" : ""}><span class="box"></span>рубрики</label>
+          <label class="toggle"><input type="checkbox" data-f="active" ${ch.active ? "checked" : ""}><span class="box"></span>канал активен</label>
+        </div>
+      </div>
+      <div class="col">
+        <div class="label">Источники (${ch.sources.length})</div>
+        ${ch.sources.map(sourceRow).join("") || '<div style="color:var(--ink-soft)">пока пусто</div>'}
+        <div class="addform">
+          <select id="kind-${ch.id}">
+            <option value="telegram">TG</option>
+            <option value="rss">RSS</option>
+          </select>
+          <input type="text" id="ref-${ch.id}" placeholder="@канал или URL фида">
+          <button onclick="addSource(${ch.id})">+ добавить</button>
+        </div>
+      </div>
+    </div>
+    <div class="ch-foot">
+      <button class="primary" onclick="saveChannel(${ch.id}, this)">Сохранить</button>
+      <span class="saved">сохранено ✓</span>
+    </div>
+  </article>`;
+}
+
+async function load() {
+  try {
+    const channels = await api("/api/channels");
+    document.getElementById("channels").innerHTML = channels.map(channelCard).join("");
+  } catch (err) {
+    showError("Не загрузилось: " + err.message);
+  }
+}
+
+async function saveChannel(id, btn) {
+  const card = document.querySelector(`[data-id="${id}"]`);
+  const patch = {};
+  for (const el of card.querySelectorAll("[data-f]")) {
+    const field = el.dataset.f;
+    if (el.type === "checkbox") patch[field] = el.checked ? 1 : 0;
+    else if (el.type === "number") patch[field] = Number(el.value);
+    else patch[field] = el.value.trim();
+  }
+  try {
+    await api(`/api/channels/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    const mark = btn.parentElement.querySelector(".saved");
+    mark.classList.add("show");
+    setTimeout(() => mark.classList.remove("show"), 1800);
+    load();
+  } catch (err) {
+    showError("Не сохранилось: " + err.message);
+  }
+}
+
+async function createChannel() {
+  const name = $("#nc-name").value.trim();
+  const chat_id = $("#nc-chat").value.trim();
+  const focus = $("#nc-focus").value.trim();
+  if (!name || !chat_id) { showError("Нужны название и chat_id"); return; }
+  try {
+    await api("/api/channels", { method: "POST", body: JSON.stringify({ name, chat_id, focus }) });
+    $("#nc-name").value = ""; $("#nc-chat").value = ""; $("#nc-focus").value = "";
+    load();
+  } catch (err) {
+    showError("Не создалось: " + err.message);
+  }
+}
+
+async function addSource(channelId) {
+  const kind = $(`#kind-${channelId}`).value;
+  const ref = $(`#ref-${channelId}`).value.trim();
+  if (!ref) return;
+  try {
+    await api(`/api/channels/${channelId}/sources`, { method: "POST", body: JSON.stringify({ kind, ref }) });
+    load();
+  } catch (err) {
+    showError("Источник не добавился: " + err.message);
+  }
+}
+
+async function toggleSource(id, active) {
+  try {
+    await api(`/api/sources/${id}`, { method: "PATCH", body: JSON.stringify({ active }) });
+    load();
+  } catch (err) { showError(err.message); }
+}
+
+async function removeSource(id, ref) {
+  if (!confirm(`Удалить источник ${ref}?`)) return;
+  try {
+    await api(`/api/sources/${id}`, { method: "DELETE" });
+    load();
+  } catch (err) { showError(err.message); }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,10 +1,13 @@
 // Ежедневные авторские рубрики: генерируются LLM с живым веб-поиском, а не парсятся.
+import { deliverDraft } from "./bot";
 import { config } from "./config";
 import {
+  type Channel,
   type Draft,
   hasRubricToday,
   insertDraft,
   lastRubricCategory,
+  listChannels,
   markRubricTopicUsed,
   pickRubricTopic,
   seedRubricTopics,
@@ -37,7 +40,7 @@ export function ensureTopicsSeeded(): void {
   seedRubricTopics("activity", ACTIVITIES);
 }
 
-export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
+export async function generateRubric(channel: Channel, kind: RubricKind): Promise<Draft | null> {
   const topic = pickRubricTopic(kind);
   if (!topic) return null;
 
@@ -69,6 +72,7 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
   );
 
   return insertDraft({
+    channel_id: channel.id,
     source: "rubric",
     source_msg_id: Date.now(),
     link: "",
@@ -82,10 +86,19 @@ export async function generateRubric(kind: RubricKind): Promise<Draft | null> {
   });
 }
 
-/** Раз в день после config.rubricHour генерирует рубрику, чередуя «место» и «занятие». */
-export async function maybeGenerateDailyRubric(): Promise<Draft | null> {
-  if (new Date().getHours() < config.rubricHour) return null;
-  if (hasRubricToday()) return null;
-  const kind: RubricKind = lastRubricCategory() === "place" ? "activity" : "place";
-  return generateRubric(kind);
+/** Раз в день (после rubric_hour канала) генерирует и доставляет рубрику, чередуя «место» и «занятие». */
+export async function maybeGenerateDailyRubrics(): Promise<number> {
+  let count = 0;
+  for (const channel of listChannels(true)) {
+    if (!channel.rubrics_enabled) continue;
+    if (new Date().getHours() < channel.rubric_hour) continue;
+    if (hasRubricToday(channel.id)) continue;
+    const kind: RubricKind = lastRubricCategory(channel.id) === "place" ? "activity" : "place";
+    const draft = await generateRubric(channel, kind);
+    if (draft) {
+      await deliverDraft(channel, draft);
+      count++;
+    }
+  }
+  return count;
 }

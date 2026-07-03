@@ -73,6 +73,29 @@ db.exec(`
     value INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, metric)
   );
+
+  CREATE TABLE IF NOT EXISTS channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    focus TEXT NOT NULL DEFAULT 'русскоязычные экспаты на Пхукете и в Таиланде',
+    negative_quota INTEGER NOT NULL DEFAULT 20,
+    auto_publish INTEGER NOT NULL DEFAULT 1,
+    rubric_hour INTEGER NOT NULL DEFAULT 10,
+    rubrics_enabled INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS channel_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(channel_id, kind, ref)
+  );
 `);
 
 // Мягкая миграция для баз, созданных до появления колонки
@@ -89,9 +112,137 @@ ensureColumn("drafts", "channel_msg_id", "channel_msg_id INTEGER");
 ensureColumn("drafts", "views", "views INTEGER");
 ensureColumn("drafts", "forwards", "forwards INTEGER");
 ensureColumn("drafts", "reactions", "reactions INTEGER");
+ensureColumn("drafts", "channel_id", "channel_id INTEGER NOT NULL DEFAULT 1");
+ensureColumn("scout_candidates", "channel_id", "channel_id INTEGER NOT NULL DEFAULT 1");
+
+// Одноразовая миграция single-channel → multi-channel: state получает префикс канала 1
+if (
+  db
+    .query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM channel_state WHERE username NOT LIKE '%:%'",
+    )
+    .get()!.n > 0
+) {
+  db.run("UPDATE channel_state SET username = '1:' || username WHERE username NOT LIKE '%:%'");
+}
+if (
+  db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM rss_seen WHERE feed NOT LIKE '%:%'").get()!
+    .n > 0
+) {
+  db.run("UPDATE OR IGNORE rss_seen SET feed = '1:' || feed WHERE feed NOT LIKE '%:%'");
+}
+
+export interface Channel {
+  id: number;
+  name: string;
+  chat_id: string;
+  focus: string;
+  negative_quota: number;
+  auto_publish: number;
+  rubric_hour: number;
+  rubrics_enabled: number;
+  active: number;
+}
+
+export interface ChannelSource {
+  id: number;
+  channel_id: number;
+  kind: string; // 'telegram' | 'rss'
+  ref: string;
+  name: string;
+  note: string;
+  active: number;
+}
+
+export function listChannels(onlyActive = false): Channel[] {
+  return db
+    .query<Channel, []>(
+      `SELECT * FROM channels ${onlyActive ? "WHERE active = 1" : ""} ORDER BY id`,
+    )
+    .all();
+}
+
+export function getChannel(id: number): Channel | null {
+  return db.query<Channel, [number]>("SELECT * FROM channels WHERE id = ?").get(id) ?? null;
+}
+
+export function createChannel(c: Omit<Channel, "id">): Channel {
+  return db
+    .query<Channel, [string, string, string, number, number, number, number, number]>(
+      `INSERT INTO channels (name, chat_id, focus, negative_quota, auto_publish, rubric_hour, rubrics_enabled, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      c.name,
+      c.chat_id,
+      c.focus,
+      c.negative_quota,
+      c.auto_publish,
+      c.rubric_hour,
+      c.rubrics_enabled,
+      c.active,
+    ) as Channel;
+}
+
+const CHANNEL_FIELDS = new Set([
+  "name",
+  "chat_id",
+  "focus",
+  "negative_quota",
+  "auto_publish",
+  "rubric_hour",
+  "rubrics_enabled",
+  "active",
+]);
+
+export function updateChannel(id: number, patch: Record<string, unknown>): Channel | null {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!CHANNEL_FIELDS.has(key)) continue;
+    db.run(`UPDATE channels SET ${key} = ? WHERE id = ?`, [value as string | number, id]);
+  }
+  return getChannel(id);
+}
+
+export function listChannelSources(channelId: number, onlyActive = false): ChannelSource[] {
+  return db
+    .query<ChannelSource, [number]>(
+      `SELECT * FROM channel_sources WHERE channel_id = ? ${onlyActive ? "AND active = 1" : ""} ORDER BY id`,
+    )
+    .all(channelId);
+}
+
+export function addChannelSource(
+  channelId: number,
+  kind: string,
+  ref: string,
+  name: string,
+  note: string,
+): ChannelSource | null {
+  return (
+    db
+      .query<ChannelSource, [number, string, string, string, string]>(
+        `INSERT INTO channel_sources (channel_id, kind, ref, name, note) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(channel_id, kind, ref) DO NOTHING RETURNING *`,
+      )
+      .get(channelId, kind, ref, name, note) ?? null
+  );
+}
+
+export function deleteChannelSource(id: number): void {
+  db.run("DELETE FROM channel_sources WHERE id = ?", [id]);
+}
+
+export function setChannelSourceActive(id: number, active: boolean): void {
+  db.run("UPDATE channel_sources SET active = ? WHERE id = ?", [active ? 1 : 0, id]);
+}
+
+export function channelsCount(): number {
+  return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM channels").get()?.n ?? 0;
+}
 
 export interface Draft {
   id: number;
+  channel_id: number;
   source: string;
   source_msg_id: number;
   link: string;
@@ -108,20 +259,20 @@ export interface Draft {
   created_at: string;
 }
 
-export function getLastMsgId(username: string): number {
+export function getLastMsgId(channelId: number, username: string): number {
   const row = db
     .query<{ last_msg_id: number }, [string]>(
       "SELECT last_msg_id FROM channel_state WHERE username = ?",
     )
-    .get(username);
+    .get(`${channelId}:${username}`);
   return row?.last_msg_id ?? 0;
 }
 
-export function setLastMsgId(username: string, msgId: number): void {
+export function setLastMsgId(channelId: number, username: string, msgId: number): void {
   db.run(
     `INSERT INTO channel_state (username, last_msg_id) VALUES (?, ?)
      ON CONFLICT(username) DO UPDATE SET last_msg_id = MAX(last_msg_id, excluded.last_msg_id)`,
-    [username, msgId],
+    [`${channelId}:${username}`, msgId],
   );
 }
 
@@ -131,14 +282,27 @@ export function insertDraft(
   const row = db
     .query<
       Draft,
-      [string, number, string, string, string, string, number, string, string | null, string | null]
+      [
+        number,
+        string,
+        number,
+        string,
+        string,
+        string,
+        string,
+        number,
+        string,
+        string | null,
+        string | null,
+      ]
     >(
-      `INSERT INTO drafts (source, source_msg_id, link, title, summary, category, importance, tone, media_type, media_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO drafts (channel_id, source, source_msg_id, link, title, summary, category, importance, tone, media_type, media_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, source_msg_id) DO NOTHING
        RETURNING *`,
     )
     .get(
+      d.channel_id,
       d.source,
       d.source_msg_id,
       d.link,
@@ -169,52 +333,55 @@ export function setChannelMsgId(id: number, channelMsgId: number): void {
   db.run("UPDATE drafts SET channel_msg_id = ? WHERE id = ?", [channelMsgId, id]);
 }
 
-export function isRssSeen(feed: string, guid: string): boolean {
+export function isRssSeen(channelId: number, feed: string, guid: string): boolean {
   const row = db
     .query<{ n: number }, [string, string]>(
       "SELECT COUNT(*) AS n FROM rss_seen WHERE feed = ? AND guid = ?",
     )
-    .get(feed, guid);
+    .get(`${channelId}:${feed}`, guid);
   return (row?.n ?? 0) > 0;
 }
 
-export function markRssSeen(feed: string, guid: string): void {
-  db.run("INSERT INTO rss_seen (feed, guid) VALUES (?, ?) ON CONFLICT DO NOTHING", [feed, guid]);
+export function markRssSeen(channelId: number, feed: string, guid: string): void {
+  db.run("INSERT INTO rss_seen (feed, guid) VALUES (?, ?) ON CONFLICT DO NOTHING", [
+    `${channelId}:${feed}`,
+    guid,
+  ]);
 }
 
 /** Доля негативных постов среди новостных черновиков за последние N дней (0..1). */
-export function negativeShare(days = 7): number {
+export function negativeShare(channelId: number, days = 7): number {
   const row = db
-    .query<{ total: number; negative: number }, [string]>(
+    .query<{ total: number; negative: number }, [number, string]>(
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN tone = 'negative' THEN 1 ELSE 0 END) AS negative
        FROM drafts
-       WHERE source != 'rubric' AND status != 'skipped'
+       WHERE channel_id = ? AND source != 'rubric' AND status != 'skipped'
          AND created_at >= datetime('now', ?)`,
     )
-    .get(`-${days} days`);
+    .get(channelId, `-${days} days`);
   if (!row || row.total === 0) return 0;
   return row.negative / row.total;
 }
 
 /** Была ли уже сегодня сгенерирована рубрика. */
-export function hasRubricToday(): boolean {
+export function hasRubricToday(channelId: number): boolean {
   const row = db
-    .query<{ n: number }, []>(
+    .query<{ n: number }, [number]>(
       `SELECT COUNT(*) AS n FROM drafts
-       WHERE source = 'rubric' AND date(created_at) = date('now')`,
+       WHERE channel_id = ? AND source = 'rubric' AND date(created_at) = date('now')`,
     )
-    .get();
+    .get(channelId);
   return (row?.n ?? 0) > 0;
 }
 
 /** Категория последней рубрики — чтобы чередовать «место» и «занятие». */
-export function lastRubricCategory(): string | null {
+export function lastRubricCategory(channelId: number): string | null {
   const row = db
-    .query<{ category: string }, []>(
-      "SELECT category FROM drafts WHERE source = 'rubric' ORDER BY id DESC LIMIT 1",
+    .query<{ category: string }, [number]>(
+      "SELECT category FROM drafts WHERE channel_id = ? AND source = 'rubric' ORDER BY id DESC LIMIT 1",
     )
-    .get();
+    .get(channelId);
   return row?.category ?? null;
 }
 
@@ -258,15 +425,18 @@ export interface StoryCandidate {
 }
 
 /** Недавние черновики с embedding — база для дедупа сюжетов. */
-export function recentStories(hours = 72): StoryCandidate[] {
+export function recentStories(channelId: number, hours = 72): StoryCandidate[] {
   const rows = db
-    .query<{ id: number; title: string; status: string; embedding: Uint8Array | null }, [string]>(
+    .query<
+      { id: number; title: string; status: string; embedding: Uint8Array | null },
+      [number, string]
+    >(
       `SELECT id, title, status, embedding FROM drafts
-       WHERE source != 'rubric' AND embedding IS NOT NULL
+       WHERE channel_id = ? AND source != 'rubric' AND embedding IS NOT NULL
          AND created_at >= datetime('now', ?)
        ORDER BY id DESC LIMIT 200`,
     )
-    .all(`-${hours} hours`);
+    .all(channelId, `-${hours} hours`);
   return rows.map((r) => {
     const buf = r.embedding as Uint8Array;
     return {
@@ -307,6 +477,7 @@ export function kvSet(key: string, value: string): void {
 
 export interface ScoutCandidate {
   id: number;
+  channel_id: number;
   kind: string;
   ref: string;
   note: string;
@@ -315,17 +486,18 @@ export interface ScoutCandidate {
 
 /** null, если такой кандидат уже был (не предлагаем повторно). */
 export function insertScoutCandidate(
+  channelId: number,
   kind: string,
   ref: string,
   note: string,
 ): ScoutCandidate | null {
   return (
     db
-      .query<ScoutCandidate, [string, string, string]>(
-        `INSERT INTO scout_candidates (kind, ref, note) VALUES (?, ?, ?)
+      .query<ScoutCandidate, [number, string, string, string]>(
+        `INSERT INTO scout_candidates (channel_id, kind, ref, note) VALUES (?, ?, ?, ?)
          ON CONFLICT(kind, ref) DO NOTHING RETURNING *`,
       )
-      .get(kind, ref, note) ?? null
+      .get(channelId, kind, ref, note) ?? null
   );
 }
 
@@ -371,14 +543,17 @@ export function publishedByCategory(days: number): { category: string; n: number
 }
 
 /** Опубликованные посты для сбора вовлечённости. */
-export function publishedForEngagement(days: number): { id: number; channel_msg_id: number }[] {
+export function publishedForEngagement(
+  channelId: number,
+  days: number,
+): { id: number; channel_msg_id: number }[] {
   return db
-    .query<{ id: number; channel_msg_id: number }, [string]>(
+    .query<{ id: number; channel_msg_id: number }, [number, string]>(
       `SELECT id, channel_msg_id FROM drafts
-       WHERE status = 'published' AND channel_msg_id IS NOT NULL
+       WHERE channel_id = ? AND status = 'published' AND channel_msg_id IS NOT NULL
          AND created_at >= datetime('now', ?)`,
     )
-    .all(`-${days} days`);
+    .all(channelId, `-${days} days`);
 }
 
 export function updateEngagement(

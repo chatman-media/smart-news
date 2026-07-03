@@ -12,11 +12,14 @@ export const config = {
   tgApiId: Number(required("TG_API_ID")),
   tgApiHash: required("TG_API_HASH"),
   botToken: required("BOT_TOKEN"),
+  // Порт локальной веб-админки
+  adminPort: Number(process.env.ADMIN_PORT || "8787"),
   // Куда бот шлёт черновики; если пусто — подставится id аккаунта из `bun run login`
   adminChatId: (process.env.ADMIN_CHAT_ID ? Number(process.env.ADMIN_CHAT_ID) : null) as
     | number
     | null,
-  channelId: parseChatId(required("CHANNEL_ID")),
+  // Используется только для первичного посева; дальше каналы живут в БД (админка)
+  channelId: process.env.CHANNEL_ID || "",
   openrouterApiKey: required("OPENROUTER_API_KEY"),
   // Автопубликация без модерации; в личку приходит уведомление с кнопкой «убрать»
   autoPublish: process.env.AUTO_PUBLISH === "1",
@@ -38,10 +41,6 @@ export const config = {
   minPostLength: 40,
   maxPostLength: 4000,
 };
-
-function parseChatId(raw: string): string | number {
-  return raw.startsWith("@") ? raw : Number(raw);
-}
 
 export function adminChatId(): number {
   if (config.adminChatId == null) {

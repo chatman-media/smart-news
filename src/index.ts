@@ -1,9 +1,11 @@
-import { bot, deliverDraft, registerAdminCommands, validateChannel } from "./bot";
+import { startAdminServer } from "./admin";
+import { bot, registerAdminCommands, validateChannels } from "./bot";
 import { config } from "./config";
 import { maybeCollectDailyEngagement } from "./engagement";
 import { runPipeline } from "./pipeline";
-import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubric } from "./rubrics";
-import { maybeRunWeeklyScout, runScout } from "./scout";
+import { ensureTopicsSeeded, generateRubric, maybeGenerateDailyRubrics } from "./rubrics";
+import { maybeRunWeeklyScout, runScoutAll } from "./scout";
+import { seedChannelsIfEmpty } from "./sources";
 import { connectAuthorized, createTelegram } from "./telegram";
 
 const tg = createTelegram();
@@ -11,13 +13,15 @@ const self = await connectAuthorized(tg);
 config.adminChatId ??= self.id;
 console.log(`MTProto: подключено как ${self.displayName} (id ${self.id})`);
 
+await seedChannelsIfEmpty();
 ensureTopicsSeeded();
+startAdminServer();
 
-await validateChannel();
+await validateChannels();
 registerAdminCommands(
   () => runPipeline(tg),
   generateRubric,
-  () => runScout(tg),
+  () => runScoutAll(tg),
 );
 void bot.start({
   onStart: (me) => console.log(`Бот: @${me.username} запущен`),
@@ -26,9 +30,7 @@ void bot.start({
 // Шаги независимы: падение одного не отменяет остальные
 async function tick(): Promise<void> {
   await runPipeline(tg).catch((err) => console.error("Пайплайн упал:", err));
-  await maybeGenerateDailyRubric()
-    .then((rubric) => (rubric ? deliverDraft(rubric) : undefined))
-    .catch((err) => console.error("Рубрика упала:", err));
+  await maybeGenerateDailyRubrics().catch((err) => console.error("Рубрика упала:", err));
   await maybeRunWeeklyScout(tg).catch((err) => console.error("Скаут упал:", err));
   await maybeCollectDailyEngagement(tg).catch((err) =>
     console.error("Сбор вовлечённости упал:", err),

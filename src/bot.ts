@@ -3,11 +3,15 @@ import { Bot, InlineKeyboard, InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { adminChatId, config } from "./config";
 import {
+  addChannelSource,
   bumpStat,
+  type Channel,
   type Draft,
+  getChannel,
   engagementByCategory,
   getDraft,
   getScoutCandidate,
+  listChannels,
   listDraftSources,
   publishedByCategory,
   type ScoutCandidate,
@@ -17,9 +21,13 @@ import {
   setScoutStatus,
   statsRange,
 } from "./db";
-import { addSource } from "./sources";
 
 export const bot = new Bot(config.botToken);
+
+/** chat_id канала для Bot API: @username как есть, числовые id — числом. */
+function chatIdOf(channel: Channel): string | number {
+  return channel.chat_id.startsWith("@") ? channel.chat_id : Number(channel.chat_id);
+}
 
 const CATEGORY_EMOJI: Record<string, string> = {
   safety: "⚠️",
@@ -65,8 +73,9 @@ function renderDraftPreview(d: Draft): string {
       : d.source.startsWith("rss:")
         ? d.source.slice(4)
         : `@${d.source}`;
+  const channelName = getChannel(d.channel_id)?.name ?? `канал ${d.channel_id}`;
   return [
-    `<b>Черновик #${d.id}</b> · ${d.category} · ${d.tone} · важность ${d.importance}/5 · ${origin}`,
+    `<b>Черновик #${d.id}</b> · ${channelName} · ${d.category} · ${d.tone} · важность ${d.importance}/5 · ${origin}`,
     "",
     renderPost(d),
   ].join("\n");
@@ -138,29 +147,29 @@ export async function sendDraftToAdmin(draft: Draft): Promise<void> {
 }
 
 /** Публикация в канал: запоминаем message_id, чистим локальное медиа. */
-export async function publishDraft(draft: Draft): Promise<void> {
-  const msg = await sendPost(config.channelId, draft, renderPost(draft));
+export async function publishDraft(channel: Channel, draft: Draft): Promise<void> {
+  const msg = await sendPost(chatIdOf(channel), draft, renderPost(draft));
   setChannelMsgId(draft.id, msg.message_id);
   setDraftStatus(draft.id, "published");
   bumpStat("published");
   await cleanupMedia(draft);
 }
 
-async function notifyAutoPublished(draft: Draft): Promise<void> {
+async function notifyAutoPublished(channel: Channel, draft: Draft): Promise<void> {
   const keyboard = new InlineKeyboard().text("🗑 Убрать из канала", `del:${draft.id}`);
   await bot.api.sendMessage(
     adminChatId(),
-    `🚀 <b>Опубликовано автоматически</b> · #${draft.id} · ${draft.category} · ${draft.tone}\n\n${renderPost(draft)}`,
+    `🚀 <b>Опубликовано</b> в «${escapeHtml(channel.name)}» · #${draft.id} · ${draft.category} · ${draft.tone}\n\n${renderPost(draft)}`,
     { parse_mode: "HTML", reply_markup: keyboard, link_preview_options: { is_disabled: true } },
   );
 }
 
-/** Единая точка доставки черновика: автопубликация или модерация. */
-export async function deliverDraft(draft: Draft): Promise<void> {
-  if (config.autoPublish) {
+/** Единая точка доставки черновика: автопубликация или модерация — по настройке канала. */
+export async function deliverDraft(channel: Channel, draft: Draft): Promise<void> {
+  if (channel.auto_publish) {
     try {
-      await publishDraft(draft);
-      await notifyAutoPublished(draft);
+      await publishDraft(channel, draft);
+      await notifyAutoPublished(channel, draft);
       return;
     } catch (err) {
       console.error(`Черновик #${draft.id}: автопубликация не удалась, шлю на модерацию:`, err);
@@ -173,10 +182,13 @@ export async function deliverDraft(draft: Draft): Promise<void> {
 export async function refreshChannelPost(draftId: number): Promise<void> {
   const draft = getDraft(draftId);
   if (!draft || draft.status !== "published" || !draft.channel_msg_id) return;
+  const channel = getChannel(draft.channel_id);
+  if (!channel) return;
+  const chatId = chatIdOf(channel);
   const text = renderPost(draft);
   try {
     if (draft.media_type === "video_link" && draft.media_path) {
-      await bot.api.editMessageText(config.channelId, draft.channel_msg_id, text, {
+      await bot.api.editMessageText(chatId, draft.channel_msg_id, text, {
         parse_mode: "HTML",
         link_preview_options: {
           url: draft.media_path,
@@ -185,12 +197,12 @@ export async function refreshChannelPost(draftId: number): Promise<void> {
         },
       });
     } else if (draft.media_type) {
-      await bot.api.editMessageCaption(config.channelId, draft.channel_msg_id, {
+      await bot.api.editMessageCaption(chatId, draft.channel_msg_id, {
         parse_mode: "HTML",
         caption: text,
       });
     } else {
-      await bot.api.editMessageText(config.channelId, draft.channel_msg_id, text, {
+      await bot.api.editMessageText(chatId, draft.channel_msg_id, text, {
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
       });
@@ -266,13 +278,18 @@ bot.callbackQuery(/^(pub|skip):(\d+)$/, async (ctx) => {
   }
 
   if (action === "pub") {
+    const channel = getChannel(draft.channel_id);
+    if (!channel) {
+      await ctx.answerCallbackQuery({ text: "Канал черновика не найден" });
+      return;
+    }
     try {
-      await publishDraft(draft);
+      await publishDraft(channel, draft);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await ctx.answerCallbackQuery({ text: "Не смог опубликовать", show_alert: true });
       await ctx.reply(
-        `Публикация не удалась: ${reason}\n\nПроверь CHANNEL_ID в .env — там должен быть юзернейм канала (не бота), а бот — админом канала с правом публикации. После правки перезапусти bun start и нажми кнопку ещё раз.`,
+        `Публикация не удалась: ${reason}\n\nПроверь chat_id канала в админке — бот должен быть админом канала с правом публикации.`,
       );
       return;
     }
@@ -295,12 +312,13 @@ bot.callbackQuery(/^del:(\d+)$/, async (ctx) => {
     return;
   }
   const draft = getDraft(Number(ctx.match[1]));
-  if (!draft?.channel_msg_id) {
+  const delChannel = draft ? getChannel(draft.channel_id) : null;
+  if (!draft?.channel_msg_id || !delChannel) {
     await ctx.answerCallbackQuery({ text: "Пост не найден" });
     return;
   }
   try {
-    await bot.api.deleteMessage(config.channelId, draft.channel_msg_id);
+    await bot.api.deleteMessage(chatIdOf(delChannel), draft.channel_msg_id);
   } catch (err) {
     // боты не могут удалять посты старше 48 часов
     const reason = err instanceof Error ? err.message : String(err);
@@ -377,8 +395,10 @@ bot.callbackQuery(/^(scoutadd|scoutno):(\d+)$/, async (ctx) => {
   }
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   if (action === "scoutadd") {
-    const added = await addSource(
-      candidate.kind as "channel" | "rss",
+    const added = addChannelSource(
+      candidate.channel_id,
+      candidate.kind === "channel" ? "telegram" : "rss",
+      candidate.ref,
       candidate.ref,
       candidate.note,
     );
@@ -401,30 +421,32 @@ bot.catch((err) => {
   console.error(`Ошибка бота (update ${err.ctx.update.update_id}): ${reason}`);
 });
 
-/** Проверка канала публикации при старте — понятное предупреждение вместо падения на первой кнопке. */
-export async function validateChannel(): Promise<void> {
+/** Проверка каналов публикации при старте — понятные предупреждения вместо падения на первой кнопке. */
+export async function validateChannels(): Promise<void> {
   const me = await bot.api.getMe();
-  const target = typeof config.channelId === "string" ? config.channelId.replace("@", "") : "";
-  if (target && me.username && target.toLowerCase() === me.username.toLowerCase()) {
-    console.warn(
-      "ВНИМАНИЕ: CHANNEL_ID указывает на самого бота — публикация не сработает. Впиши в .env юзернейм КАНАЛА и перезапусти.",
-    );
-    return;
-  }
-  try {
-    await bot.api.getChat(config.channelId);
-    console.log(`Канал публикации: ${config.channelId}`);
-  } catch {
-    console.warn(
-      `ВНИМАНИЕ: канал ${config.channelId} недоступен боту — проверь CHANNEL_ID в .env и что бот добавлен админом с правом публикации.`,
-    );
+  for (const channel of listChannels(true)) {
+    const target = channel.chat_id.replace("@", "");
+    if (me.username && target.toLowerCase() === me.username.toLowerCase()) {
+      console.warn(
+        `ВНИМАНИЕ: канал «${channel.name}» указывает на самого бота — публикация не сработает. Поменяй chat_id в админке.`,
+      );
+      continue;
+    }
+    try {
+      await bot.api.getChat(chatIdOf(channel));
+      console.log(`Канал «${channel.name}»: ${channel.chat_id} доступен`);
+    } catch {
+      console.warn(
+        `ВНИМАНИЕ: канал «${channel.name}» (${channel.chat_id}) недоступен боту — добавь бота админом с правом публикации.`,
+      );
+    }
   }
 }
 
 /** Регистрирует админ-команды. */
 export function registerAdminCommands(
   runNow: () => Promise<number>,
-  makeRubric: (kind: "place" | "activity") => Promise<Draft | null>,
+  makeRubric: (channel: Channel, kind: "place" | "activity") => Promise<Draft | null>,
   scoutNow: () => Promise<number>,
 ): void {
   bot.command("stats", async (ctx) => {
@@ -446,11 +468,16 @@ export function registerAdminCommands(
   bot.command("rubric", async (ctx) => {
     if (!isAdmin(ctx.from?.id)) return;
     const kind = ctx.match?.trim() === "activity" ? "activity" : "place";
-    await ctx.reply(`Генерирую рубрику (${kind})…`);
+    const channel = listChannels(true).find((c) => c.rubrics_enabled);
+    if (!channel) {
+      await ctx.reply("Нет канала с включёнными рубриками (см. админку)");
+      return;
+    }
+    await ctx.reply(`Генерирую рубрику (${kind}) для «${channel.name}»…`);
     try {
-      const draft = await makeRubric(kind);
+      const draft = await makeRubric(channel, kind);
       if (draft) {
-        await deliverDraft(draft);
+        await deliverDraft(channel, draft);
       } else {
         await ctx.reply("Не получилось: нет свободной темы");
       }

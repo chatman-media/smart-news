@@ -5,9 +5,11 @@ import { config } from "./config";
 import {
   addDraftSource,
   bumpStat,
+  type Channel,
   getLastMsgId,
   insertDraft,
   isRssSeen,
+  listChannels,
   markRssSeen,
   negativeShare,
   recentStories,
@@ -17,28 +19,40 @@ import {
 import { cosine, embed } from "./llm";
 import { generateIllustration, imageFits } from "./media-ai";
 import { extractArticleVideo, fetchFeedItems, guidToId } from "./rss";
-import { loadFeeds, loadSources } from "./sources";
+import { rssSources, telegramSources } from "./sources";
 
 let running = false;
 
-/** Один проход: сбор нового → дешёвый триаж заголовков → полная классификация → склейка сюжетов → черновики. */
+/** Один проход по всем активным каналам. Возвращает число новых черновиков. */
 export async function runPipeline(tg: TelegramClient): Promise<number> {
   if (running) return 0;
   running = true;
   try {
-    const posts = [...(await gatherTelegram(tg)), ...(await gatherRss())];
-    if (posts.length === 0) return 0;
-    bumpStat("gathered", posts.length);
-    const candidates = await triagePosts(posts);
-    bumpStat("triage_out", posts.length - candidates.length);
-    let newDrafts = 0;
-    for (const post of candidates) {
-      if (await processCandidate(post)) newDrafts++;
+    let total = 0;
+    for (const channel of listChannels(true)) {
+      total += await runChannelPipeline(tg, channel).catch((err) => {
+        console.error(`[канал «${channel.name}»] пайплайн упал:`, err);
+        return 0;
+      });
     }
-    return newDrafts;
+    return total;
   } finally {
     running = false;
   }
+}
+
+/** Канал: сбор нового → дешёвый триаж заголовков → полная классификация → склейка сюжетов → черновики. */
+async function runChannelPipeline(tg: TelegramClient, channel: Channel): Promise<number> {
+  const posts = [...(await gatherTelegram(tg, channel)), ...(await gatherRss(channel))];
+  if (posts.length === 0) return 0;
+  bumpStat("gathered", posts.length);
+  const candidates = await triagePosts(channel, posts);
+  bumpStat("triage_out", posts.length - candidates.length);
+  let newDrafts = 0;
+  for (const post of candidates) {
+    if (await processCandidate(tg, channel, post)) newDrafts++;
+  }
+  return newDrafts;
 }
 
 export interface PostMedia {
@@ -61,13 +75,14 @@ interface NewPost {
 const TRIAGE_CHUNK = 25;
 
 /** Триаж-батчи: отсеянное сразу помечается прочитанным, кандидаты идут дальше. */
-async function triagePosts(posts: NewPost[]): Promise<NewPost[]> {
+async function triagePosts(channel: Channel, posts: NewPost[]): Promise<NewPost[]> {
   const candidates: NewPost[] = [];
   for (let offset = 0; offset < posts.length; offset += TRIAGE_CHUNK) {
     const chunk = posts.slice(offset, offset + TRIAGE_CHUNK);
     let keep: Set<number>;
     try {
       keep = await triage(
+        channel,
         chunk.map((p, i) => ({ index: i, headline: `[${p.source}] ${p.headline}` })),
       );
     } catch (err) {
@@ -83,15 +98,21 @@ async function triagePosts(posts: NewPost[]): Promise<NewPost[]> {
       }
     });
   }
-  console.log(`Триаж: ${candidates.length} кандидатов из ${posts.length}`);
+  console.log(
+    `[канал «${channel.name}»] триаж: ${candidates.length} кандидатов из ${posts.length}`,
+  );
   return candidates;
 }
 
 /** Полная классификация кандидата + квота негатива + склейка сюжетов + черновик. */
-async function processCandidate(post: NewPost): Promise<boolean> {
+async function processCandidate(
+  tg: TelegramClient,
+  channel: Channel,
+  post: NewPost,
+): Promise<boolean> {
   let verdict: Verdict;
   try {
-    verdict = await classify(post.text);
+    verdict = await classify(channel, post.text);
   } catch (err) {
     console.error(`[${post.label}] ошибка классификации (повторим в следующем цикле):`, err);
     return false; // markSeen не зовём — пост вернётся
@@ -103,7 +124,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
     verdict.keep &&
     verdict.tone === "negative" &&
     verdict.importance < 5 &&
-    negativeShare() * 100 >= config.negativeQuotaPct
+    negativeShare(channel.id) * 100 >= channel.negative_quota
   ) {
     verdict.keep = false;
     verdict.reason = "negative_quota";
@@ -119,7 +140,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   let vector: Float32Array | null = null;
   try {
     vector = await embed(`${verdict.title}\n${verdict.summary}`);
-    const storyId = await matchStory(verdict, vector);
+    const storyId = await matchStory(channel, verdict, vector);
     if (storyId) {
       addDraftSource(storyId, post.source, post.link);
       await refreshDraftPreview(storyId); // если сюжет ещё на модерации
@@ -172,6 +193,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   }
 
   const draft = insertDraft({
+    channel_id: channel.id,
     source: post.source,
     source_msg_id: post.sourceMsgId,
     link: post.link,
@@ -186,7 +208,7 @@ async function processCandidate(post: NewPost): Promise<boolean> {
   if (!draft) return false;
   if (vector) setDraftEmbedding(draft.id, vector);
   bumpStat("drafted");
-  await deliverDraft(draft);
+  await deliverDraft(channel, draft);
   return true;
 }
 
@@ -194,10 +216,11 @@ const SIM_AUTO = 0.92; // выше — дубль без вопросов
 const SIM_CHECK = 0.6; // выше — спрашиваем LLM
 
 async function matchStory(
+  channel: Channel,
   verdict: { title: string; summary: string },
   vector: Float32Array,
 ): Promise<number | null> {
-  const scored = recentStories()
+  const scored = recentStories(channel.id)
     .map((s) => ({ ...s, sim: cosine(vector, s.embedding) }))
     .filter((s) => s.sim >= SIM_CHECK)
     .sort((a, b) => b.sim - a.sim);
@@ -233,21 +256,21 @@ async function downloadTelegramMedia(
   return null;
 }
 
-async function gatherTelegram(tg: TelegramClient): Promise<NewPost[]> {
-  const sources = await loadSources();
+async function gatherTelegram(tg: TelegramClient, channel: Channel): Promise<NewPost[]> {
   const posts: NewPost[] = [];
 
-  for (const source of sources) {
-    const lastId = getLastMsgId(source.username);
+  for (const source of telegramSources(channel)) {
+    const username = source.ref;
+    const lastId = getLastMsgId(channel.id, username);
     const limit = lastId === 0 ? config.firstRunLimit : config.perCycleLimit;
 
     const messages: Message[] = [];
     try {
-      for await (const msg of tg.iterHistory(source.username, { limit, minId: lastId })) {
+      for await (const msg of tg.iterHistory(username, { limit, minId: lastId })) {
         messages.push(msg);
       }
     } catch (err) {
-      console.error(`[${source.username}] не удалось получить историю:`, err);
+      console.error(`[${username}] не удалось получить историю:`, err);
       continue;
     }
 
@@ -257,18 +280,18 @@ async function gatherTelegram(tg: TelegramClient): Promise<NewPost[]> {
     for (const msg of messages) {
       const text = (msg.text ?? "").trim();
       if (text.length < config.minPostLength) {
-        setLastMsgId(source.username, msg.id);
+        setLastMsgId(channel.id, username, msg.id);
         continue;
       }
       posts.push({
-        source: source.username,
+        source: username,
         sourceMsgId: msg.id,
-        link: `https://t.me/${source.username}/${msg.id}`,
+        link: `https://t.me/${username}/${msg.id}`,
         text,
         headline: text.split("\n")[0]?.slice(0, 120) ?? "",
-        label: `${source.username}/${msg.id}`,
-        markSeen: () => setLastMsgId(source.username, msg.id),
-        fetchMedia: () => downloadTelegramMedia(tg, source.username, msg),
+        label: `${username}/${msg.id}`,
+        markSeen: () => setLastMsgId(channel.id, username, msg.id),
+        fetchMedia: () => downloadTelegramMedia(tg, username, msg),
       });
     }
   }
@@ -276,26 +299,26 @@ async function gatherTelegram(tg: TelegramClient): Promise<NewPost[]> {
   return posts;
 }
 
-async function gatherRss(): Promise<NewPost[]> {
-  const feeds = await loadFeeds();
+async function gatherRss(channel: Channel): Promise<NewPost[]> {
   const posts: NewPost[] = [];
 
-  for (const feed of feeds) {
+  for (const feed of rssSources(channel)) {
+    const feedName = feed.name || feed.ref;
     let items: Awaited<ReturnType<typeof fetchFeedItems>>;
     try {
-      items = await fetchFeedItems(feed, config.rssPerCycleLimit);
+      items = await fetchFeedItems({ name: feedName, url: feed.ref }, config.rssPerCycleLimit);
     } catch (err) {
-      console.error(`[rss:${feed.name}] не удалось получить фид:`, err);
+      console.error(`[rss:${feedName}] не удалось получить фид:`, err);
       continue;
     }
 
-    const fresh = items.filter((item) => !isRssSeen(feed.name, item.guid));
+    const fresh = items.filter((item) => !isRssSeen(channel.id, feedName, item.guid));
     // Первый запуск фида: не разбираем весь архив
     const isFirstRun = fresh.length === items.length && items.length > 0;
     const batch = isFirstRun ? fresh.slice(0, config.rssFirstRunLimit) : fresh;
     if (isFirstRun) {
       for (const item of fresh.slice(config.rssFirstRunLimit)) {
-        markRssSeen(feed.name, item.guid);
+        markRssSeen(channel.id, feedName, item.guid);
       }
     }
 
@@ -304,20 +327,20 @@ async function gatherRss(): Promise<NewPost[]> {
 
     for (const item of batch) {
       if (item.text.trim().length < config.minPostLength) {
-        markRssSeen(feed.name, item.guid);
+        markRssSeen(channel.id, feedName, item.guid);
         continue;
       }
       posts.push({
-        source: `rss:${feed.name}`,
+        source: `rss:${feedName}`,
         sourceMsgId: guidToId(item.guid),
         link: item.link,
         text: item.text,
         headline: item.title.slice(0, 120),
-        label: `rss:${feed.name} ${item.link}`,
-        markSeen: () => markRssSeen(feed.name, item.guid),
+        label: `rss:${feedName} ${item.link}`,
+        markSeen: () => markRssSeen(channel.id, feedName, item.guid),
         // YouTube-фиды: сам ролик как большое видео-превью; остальные — картинка статьи
         fetchMedia: async () =>
-          feed.url.includes("youtube.com/feeds")
+          feed.ref.includes("youtube.com/feeds")
             ? { type: "video_link", path: item.link }
             : item.imageUrl
               ? { type: "photo", path: item.imageUrl }

@@ -1,6 +1,10 @@
 // Инжест RSS-первоисточников (английские и тайские издания).
 import { XMLParser } from "fast-xml-parser";
-import type { Feed } from "./sources";
+
+export interface Feed {
+  name: string;
+  url: string;
+}
 
 export interface FeedItem {
   guid: string;

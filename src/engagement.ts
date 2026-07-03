@@ -1,18 +1,26 @@
-// Обратная связь по каналу: раз в день читаем просмотры/реакции постов через MTProto
+// Обратная связь по каналам: раз в день читаем просмотры/реакции постов через MTProto
 // и превращаем их в подсказку классификатору (какие категории заходят аудитории).
 import type { TelegramClient } from "@mtcute/bun";
-import { config } from "./config";
-import { engagementByCategory, kvGet, kvSet, publishedForEngagement, updateEngagement } from "./db";
+import {
+  type Channel,
+  engagementByCategory,
+  kvGet,
+  kvSet,
+  listChannels,
+  publishedForEngagement,
+  updateEngagement,
+} from "./db";
 
 const MIN_VIEWS_FOR_HINT = 50;
 
-export async function collectEngagement(tg: TelegramClient): Promise<number> {
-  const drafts = publishedForEngagement(14);
+async function collectChannelEngagement(tg: TelegramClient, channel: Channel): Promise<number> {
+  const drafts = publishedForEngagement(channel.id, 14);
   if (drafts.length === 0) return 0;
   const byMsgId = new Map(drafts.map((d) => [d.channel_msg_id, d.id]));
 
-  const peer =
-    typeof config.channelId === "string" ? config.channelId.replace("@", "") : config.channelId;
+  const peer = channel.chat_id.startsWith("@")
+    ? channel.chat_id.replace("@", "")
+    : Number(channel.chat_id);
 
   let updated = 0;
   for await (const msg of tg.iterHistory(peer, { limit: 100 })) {
@@ -23,13 +31,24 @@ export async function collectEngagement(tg: TelegramClient): Promise<number> {
     updated++;
   }
 
-  refreshHint();
+  refreshHint(channel);
+  return updated;
+}
+
+export async function collectEngagement(tg: TelegramClient): Promise<number> {
+  let updated = 0;
+  for (const channel of listChannels(true)) {
+    updated += await collectChannelEngagement(tg, channel).catch((err) => {
+      console.error(`[engagement] канал «${channel.name}» упал:`, err);
+      return 0;
+    });
+  }
   console.log(`[engagement] обновлена вовлечённость ${updated} постов`);
   return updated;
 }
 
-/** Пересчитывает подсказку для классификатора по накопленной вовлечённости. */
-function refreshHint(): void {
+/** Пересчитывает подсказку классификатору по накопленной вовлечённости канала. */
+function refreshHint(channel: Channel): void {
   const scored = engagementByCategory(14)
     .filter((r) => r.views >= MIN_VIEWS_FOR_HINT)
     .map((r) => ({ ...r, rate: (r.reactions + r.forwards) / r.views }))
@@ -41,7 +60,7 @@ function refreshHint(): void {
     .join(", ");
   const low = scored[scored.length - 1]?.category ?? "";
   kvSet(
-    "engagement_hint",
+    `engagement_hint:${channel.id}`,
     `аудитория активнее всего реагирует на категории ${top}, слабее всего — ${low}. Учитывай это при выставлении importance (калибровка, а не запрет).`,
   );
 }

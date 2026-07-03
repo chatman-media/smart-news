@@ -2,10 +2,16 @@
 import type { TelegramClient } from "@mtcute/bun";
 import { sendScoutCandidateToAdmin } from "./bot";
 import { config } from "./config";
-import { insertScoutCandidate, kvGet, kvSet } from "./db";
+import {
+  type Channel,
+  insertScoutCandidate,
+  kvGet,
+  kvSet,
+  listChannels,
+  listChannelSources,
+} from "./db";
 import { contentOf, llm, parseJsonLoose } from "./llm";
 import { fetchFeedItems } from "./rss";
-import { loadFeeds, loadSources } from "./sources";
 
 const SCOUT_INTERVAL_DAYS = 7;
 
@@ -15,22 +21,22 @@ interface RawCandidate {
   note: string;
 }
 
-const SCOUT_PROMPT = `Найди через веб-поиск действующие источники новостей о Пхукете и Таиланде, полезные русскоязычным экспатам:
-- публичные Telegram-каналы (новости, а не чаты и не боты) — русские, английские, тайские
+const SCOUT_PROMPT = (focus: string, known: string[]) => `Найди через веб-поиск действующие источники новостей для аудитории: ${focus}.
+- публичные Telegram-каналы (новости, а не чаты и не боты) — на любых языках
 - RSS-фиды местных изданий (проверяй, что у издания есть RSS: обычно /feed или /rss)
 
-Не предлагай: The Thaiger, Khaosod, Bangkok Post, «Новости Пхукета», «Реальный Пхукет» — они уже подключены.
+Уже подключены (не предлагай): ${known.join(", ") || "пока ничего"}.
 
 Ответь строго JSON без пояснений:
 {"candidates": [{"kind": "channel"|"rss", "ref": "<username без @ | полный URL фида>", "note": "<что это, на каком языке, чем полезно — одной строкой>"}]}
 Максимум 6 кандидатов, только те, в существовании которых уверен.`;
 
-async function findCandidates(): Promise<RawCandidate[]> {
+async function findCandidates(focus: string, known: string[]): Promise<RawCandidate[]> {
   const response = await llm.chat.completions.create({
     model: `${config.llmModel}:online`,
     // с большим запасом: reasoning + результаты веб-поиска едят лимит до ответа
     max_tokens: 8000,
-    messages: [{ role: "user", content: SCOUT_PROMPT }],
+    messages: [{ role: "user", content: SCOUT_PROMPT(focus, known) }],
   });
   const parsed = parseJsonLoose<{ candidates: RawCandidate[] }>(contentOf(response));
   return Array.isArray(parsed.candidates) ? parsed.candidates : [];
@@ -49,15 +55,13 @@ async function isAlive(tg: TelegramClient, c: RawCandidate): Promise<boolean> {
   }
 }
 
-/** Один прогон скаута. Возвращает число новых кандидатов, отправленных админу. */
-export async function runScout(tg: TelegramClient): Promise<number> {
-  const [channels, feeds] = [await loadSources(), await loadFeeds()];
-  const known = new Set([
-    ...channels.map((c) => c.username.toLowerCase()),
-    ...feeds.map((f) => f.url),
-  ]);
+/** Прогон скаута для одного канала. Возвращает число новых кандидатов, отправленных админу. */
+export async function runScout(tg: TelegramClient, channel: Channel): Promise<number> {
+  const sources = listChannelSources(channel.id);
+  const known = new Set(sources.map((s) => s.ref.toLowerCase()));
+  const knownNames = sources.map((s) => s.name || s.ref);
 
-  const found = await findCandidates();
+  const found = await findCandidates(channel.focus, knownNames);
   let sent = 0;
   for (const raw of found) {
     if (raw.kind !== "channel" && raw.kind !== "rss") continue;
@@ -74,10 +78,22 @@ export async function runScout(tg: TelegramClient): Promise<number> {
       console.log(`[scout] кандидат ${ref} не отвечает — пропускаю`);
       continue;
     }
-    const candidate = insertScoutCandidate(raw.kind, ref, raw.note ?? "");
+    const candidate = insertScoutCandidate(channel.id, raw.kind, ref, raw.note ?? "");
     if (!candidate) continue; // уже предлагали
     await sendScoutCandidateToAdmin(candidate);
     sent++;
+  }
+  return sent;
+}
+
+/** Скаут по всем активным каналам. */
+export async function runScoutAll(tg: TelegramClient): Promise<number> {
+  let sent = 0;
+  for (const channel of listChannels(true)) {
+    sent += await runScout(tg, channel).catch((err) => {
+      console.error(`[scout] канал «${channel.name}» упал:`, err);
+      return 0;
+    });
   }
   return sent;
 }
@@ -87,6 +103,6 @@ export async function maybeRunWeeklyScout(tg: TelegramClient): Promise<void> {
   const last = kvGet("last_scout_at");
   if (last && Date.now() - Date.parse(last) < SCOUT_INTERVAL_DAYS * 24 * 3600 * 1000) return;
   kvSet("last_scout_at", new Date().toISOString());
-  const sent = await runScout(tg);
+  const sent = await runScoutAll(tg);
   console.log(`[scout] прогон завершён: ${sent} новых кандидатов`);
 }
